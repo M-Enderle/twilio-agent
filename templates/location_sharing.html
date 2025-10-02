@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standort teilen</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Playfair Display', serif;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            line-height: 1.6;
+          	background: white;
+        }
+
+        .container {
+            background: white;
+            text-align: center;
+        }
+
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 400;
+            margin-bottom: 1rem;
+            color: #2c3e50;
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            font-size: 1.1rem;
+            color: #6c757d;
+            margin-bottom: 2.5rem;
+            font-weight: 300;
+            line-height: 1.5;
+        }
+
+        .location-icon {
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .location-icon svg {
+            width: 28px;
+            height: 28px;
+            fill: white;
+        }
+
+        .share-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2.5rem;
+            font-size: 1.1rem;
+            font-family: 'Playfair Display', serif;
+            font-weight: 500;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+            letter-spacing: 0.5px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .share-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .share-button:active {
+            transform: translateY(0);
+        }
+
+        .share-button:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .message {
+            margin-top: 2rem;
+            padding: 1.25rem;
+            border-radius: 15px;
+            font-weight: 400;
+            font-size: 1rem;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.3s ease;
+          	display: none;
+        }
+
+        .message.show {
+          	display: inline-block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .message.error {
+            background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%);
+            color: #c53030;
+            border: 1px solid #feb2b2;
+        }
+
+        .message.success {
+            background: linear-gradient(135deg, #f0fff4 0%, #c6f6d5 100%);
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .privacy-note {
+            margin-top: 2rem;
+            font-size: 0.9rem;
+            color: #6c757d;
+            font-weight: 300;
+            font-style: italic;
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 2rem 1.5rem;
+                margin: 1rem;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            .subtitle {
+                font-size: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="location-icon">
+            <svg viewBox="0 0 24 24">
+                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+            </svg>
+        </div>
+        
+        <h1>Standort teilen</h1>
+        <p class="subtitle">Bitte teile deinen aktuellen Standort mit uns, damit wir dich bestmöglich unterstützen können.</p>
+        
+        <button id="shareButton" class="share-button" onclick="shareLocation()">
+            Standort freigeben
+        </button>
+        
+        <div id="message" class="message"></div>
+        
+        <p class="privacy-note">
+            Dein Standort wird sicher übertragen und nur für den angegebenen Zweck verwendet.
+        </p>
+    </div>
+
+    <script>
+        function showMessage(text, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = text;
+            
+            // Trigger animation
+            setTimeout(() => {
+                messageDiv.classList.add('show');
+            }, 10);
+        }
+
+        function setButtonLoading(loading) {
+            const button = document.getElementById('shareButton');
+            if (loading) {
+                button.innerHTML = '<span class="loading"></span>Standort wird ermittelt...';
+                button.disabled = true;
+            } else {
+                button.innerHTML = 'Standort freigeben';
+                button.disabled = false;
+            }
+        }
+
+        function shareLocation() {
+            const messageDiv = document.getElementById('message');
+            messageDiv.classList.remove('show');
+            
+            if (!navigator.geolocation) {
+                setTimeout(() => {
+                    showMessage('Geolocation wird von diesem Browser nicht unterstützt.', 'error');
+                }, 300);
+                return;
+            }
+            
+            setButtonLoading(true);
+            
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const data = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    };
+                    
+                    fetch('/receive-location/{{ link_id }}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(data)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        setButtonLoading(false);
+                        if (data.success) {
+                            showMessage('✓ Standort erfolgreich geteilt! Vielen Dank für deine Unterstützung.', 'success');
+                          document.getElementById('shareButton').style.display = 'none';
+                        } else {
+                            showMessage('Fehler beim Teilen des Standorts. Bitte versuche es erneut.', 'error');
+                        }
+                    })
+                    .catch(error => {
+                        setButtonLoading(false);
+                        showMessage('Fehler beim Senden der Daten. Bitte überprüfe deine Internetverbindung.', 'error');
+                    });
+                },
+                function(error) {
+                    setButtonLoading(false);
+                    let errorMessage = 'Fehler beim Abrufen des Standorts.';
+                    switch(error.code) {
+                        case error.PERMISSION_DENIED:
+                            errorMessage = 'Standortfreigabe wurde verweigert. Bitte aktiviere die Standortberechtigung in deinen Browsereinstellungen.';
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            errorMessage = 'Dein Standort ist momentan nicht verfügbar. Bitte versuche es später erneut.';
+                            break;
+                        case error.TIMEOUT:
+                            errorMessage = 'Zeitüberschreitung beim Abrufen des Standorts. Bitte versuche es erneut.';
+                            break;
+                    }
+                    showMessage(errorMessage, 'error');
+                }
+            );
+        }
+    </script>
+</body>
+</html>
