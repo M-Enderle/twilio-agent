@@ -30,11 +30,10 @@ class ContactManager:
 
 
 # Example usage
-if __name__ == "__main__":
-    contacts = ContactManager()
-    
-    print("All contacts:")
-    for name, phone in contacts.get_all_contacts().items():
-        print(f"  {name}: {phone}")
-    
-    print(f"\nAndi's phone: {contacts.get_phone('Andi')}")
+contacts = ContactManager()
+
+print("All contacts:")
+for name, phone in contacts.get_all_contacts().items():
+    print(f"  {name}: {phone}")
+
+print(f"\nAndi's phone: {contacts.get_phone('Andi')}")
