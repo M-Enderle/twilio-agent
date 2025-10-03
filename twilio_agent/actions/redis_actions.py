@@ -137,6 +137,13 @@ def get_shared_location(call_number: str) -> dict:
     return None
 
 
+def add_to_caller_queue(caller: str, name: str):
+    redis.lpush(f"callers:{caller}:queue", name)
+    
+def get_next_caller_in_queue(caller: str) -> str:
+    return redis.rpop(f"callers:{caller}:queue")
+
+
 if __name__ == "__main__":
     print(get_intent("+4917657888987"))
     set_intent("+4917657888987", "Schlüsseldienst")

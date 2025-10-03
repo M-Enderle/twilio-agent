@@ -128,8 +128,9 @@ def transfer(response: VoiceResponse, caller: str, name: str = None):
         else:
             name = "Andi"
     logger.info(f"Transferring call to {name}")
-    tr = Dial()
+    tr = Dial(action=f"{server_url}/parse-transfer-call/{name}", timeout=13)
     phone_number = contact_manager.get_phone(name)
+    logger.info(f"Transferring call to {name} with phone number {phone_number}")
     tr.append(Number(phone_number))
     response.append(tr)
 

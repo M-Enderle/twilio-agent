@@ -18,6 +18,8 @@ from twilio_agent.actions.redis_actions import (
     save_location,
     set_intent,
     user_message,
+    add_to_caller_queue,
+    get_next_caller_in_queue,
 )
 from twilio_agent.actions.twilio_actions import (
     fallback_no_response,
@@ -53,6 +55,13 @@ async def health_check():
 
 
 @app.api_route("/incoming-call", methods=["GET", "POST"])
+async def test(request: Request):
+    with new_response() as response:
+        transfer(response, await caller(request), "Andi")
+        add_to_caller_queue(await caller(request), "Nils")
+        return send_request(request, response)
+
+@app.api_route("/incoming-call2", methods=["GET", "POST"])
 async def incoming_call(request: Request):
 
     form_data = await request.form()
@@ -254,7 +263,7 @@ async def parse_location_locksmith(request: Request):
             gather = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
-                timeout=30,
+                timeout=10,
                 numDigits=5,
             )
             message = "Ich konnte den Ort nicht finden. Bitte gib die Postleitzahl auf dem Nummernblock ein."
@@ -265,7 +274,7 @@ async def parse_location_locksmith(request: Request):
             gather2 = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
-                timeout=20,
+                timeout=10,
                 numDigits=5,
             )
             say(gather2, "Bitte gib die Postleitzahl erneut ein.")
@@ -287,7 +296,8 @@ async def parse_location_correct_locksmith(request: Request):
             gather = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
-                timeout=5,
+                numDigits=5,
+                timeout=10,
             )
             message = "Bitte gib die Postleitzahl auf dem Nummernblock ein oder drücke die einz falls du deine Postleitzahl nicht kennst."       
             agent_message(await caller(request), message)
@@ -296,7 +306,8 @@ async def parse_location_correct_locksmith(request: Request):
             gather2 = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
-                timeout=20,
+                numDigits=5,
+                timeout=10,
             )
             say(gather2, "Bitte gib die Postleitzahl erneut ein.")
             response.append(gather2)
@@ -413,7 +424,8 @@ async def ask_plz_towing(request: Request):
         gather = Gather(
             input="dtmf",
             action="/parse-plz-towing",
-            timeout=30,
+            timeout=10,
+            numDigits=5,
         )
         message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein."
         agent_message(await caller(request), message)
@@ -422,7 +434,8 @@ async def ask_plz_towing(request: Request):
         gather2 = Gather(
             input="dtmf",
             action="/parse-plz-towing",
-            timeout=20,
+            numDigits=5,
+            timeout=10,
         )
         say(gather2, "Bitte gib die Postleitzahl erneut ein.")
         response.append(gather2)
@@ -450,7 +463,8 @@ async def parse_plz_towing(request: Request):
             gather = Gather(
                 input="dtmf",
                 action="/parse-plz-towing-retry",
-                timeout=30,
+                numDigits=5,
+                timeout=10,
             )
             message = "Leider konnte ich den Ort nicht finden. Bitte gib die Postleitzahl erneut ein."
             agent_message(await caller(request), message)
@@ -459,7 +473,8 @@ async def parse_plz_towing(request: Request):
             gather2 = Gather(
                 input="dtmf",
                 action="/parse-plz-towing-retry",
-                timeout=20,
+                numDigits=5,
+                timeout=10,
             )
             say(gather2, "Bitte gib die Postleitzahl erneut ein.")
             response.append(gather2)
@@ -593,11 +608,8 @@ async def call_locksmith(request: Request, with_message: bool = True):
             agent_message(await caller(request), message)
             say(response, message)
         transfer(response, await caller(request))
-        transfer(response, await caller(request), "Jan")
-        transfer(response, await caller(request), "Haas")
-        message = "Leider sind aktuell alle Monteure im Einsatz. Bitte versuche es später erneut."
-        agent_message(await caller(request), message)
-        say(response, message)
+        add_to_caller_queue(await caller(request), "Jan")
+        add_to_caller_queue(await caller(request), "Haas")
         return send_request(request, response)
 
 
@@ -608,19 +620,17 @@ async def call_towing_service(request: Request, with_message: bool = True):
             agent_message(await caller(request), message)
             say(response, message)
         transfer(response, await caller(request), "Markus")
-        transfer(response, await caller(request), "Nils")
-        transfer(response, await caller(request), "Ömer")
-        message = "Leider sind aktuell alle Fahrer im Einsatz. Bitte versuche es später erneut."
-        agent_message(await caller(request), message)
-        say(response, message)
+        add_to_caller_queue(await caller(request), "Nils")
+        add_to_caller_queue(await caller(request), "Ömer")
         return send_request(request, response)
 
 
-async def end_call(request: Request):
+async def end_call(request: Request, with_message: bool = True):
     with new_response() as response:
-        message = "Vielen Dank für deinen Anruf. Wir wünschen dir noch einen schönen Tag. Auf Wiederhören!"
-        agent_message(await caller(request), message)
-        say(response, message)
+        if with_message:
+            message = "Vielen Dank für deinen Anruf. Wir wünschen dir noch einen schönen Tag. Auf Wiederhören!"
+            agent_message(await caller(request), message)
+            say(response, message)
         response.hangup()
         return send_request(request, response)
 
@@ -630,3 +640,21 @@ async def status(request: Request):
     print(await request.form())
     logger.info("Status callback from Twilio: %s", await request.form())
     return JSONResponse({"status": "ok"})
+
+@app.api_route("/parse-transfer-call/{name}", methods=["GET", "POST"])
+async def parse_transfer_call(request: Request, name: str):
+    form_data = await request.form()
+    logger.info("Transfer call status: %s", form_data.get("DialCallStatus"))
+    with new_response() as response:
+        if form_data.get("DialCallStatus") != "completed":
+            next_caller = get_next_caller_in_queue(await caller(request))
+            if next_caller:
+                transfer(response, await caller(request), next_caller)
+                return send_request(request, response)
+            else:
+                message = "Leider sind aktuell alle Mitarbeiter im Einsatz. Bitte versuche es später erneut."
+                agent_message(await caller(request), message)
+                say(response, message)
+                return await end_call(request, with_message=False)
+    logger.info("Successfully transferred call to %s", name)
+    return await end_call(request, with_message=False)
