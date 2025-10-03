@@ -29,6 +29,7 @@ class LocationData(BaseModel):
     latitude: float
     longitude: float
 
+
 def generate_location_link(phone_number: str):
     """
     Generate a unique, temporary link for location sharing.
@@ -148,7 +149,8 @@ def receive_location(link_id: str, location_data: LocationData):
 
         # Trigger outbound call to the phone number associated with the link
         from twilio_agent.actions.twilio_actions import outbound_call_after_sms
-        outbound_call_after_sms(link_data['phone_number'])
+
+        outbound_call_after_sms(link_data["phone_number"])
 
         return {
             "success": True,

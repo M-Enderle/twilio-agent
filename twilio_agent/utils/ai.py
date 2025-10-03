@@ -8,9 +8,7 @@ from xai_sdk.chat import system, user
 
 logger = logging.getLogger("uvicorn")
 
-client = Client(
-    api_key=os.environ["XAI_API_KEY"]
-)
+client = Client(api_key=os.environ["XAI_API_KEY"])
 
 
 def _ask_grok(system_prompt: str, user_prompt: str) -> str:

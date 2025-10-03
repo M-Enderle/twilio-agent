@@ -42,7 +42,9 @@ def _closest_provider(origin: routing_v2.Waypoint, intent: str):
         try:
             response = client.compute_routes(
                 request=_compute_request(origin, company["zipcode"]),
-                metadata=[("x-goog-fieldmask", "routes.distanceMeters,routes.duration")],
+                metadata=[
+                    ("x-goog-fieldmask", "routes.distanceMeters,routes.duration")
+                ],
             )
             if not response.routes:
                 continue
