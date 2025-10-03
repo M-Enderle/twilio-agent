@@ -19,7 +19,8 @@ jinja_env = Environment(
     loader=FileSystemLoader(template_dir, encoding="utf-8"), autoescape=True
 )
 
-redis_client = Redis(host="localhost")
+REDIS_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379")
+redis_client = Redis.from_url(REDIS_URL)
 
 router = APIRouter()
 
@@ -27,7 +28,6 @@ router = APIRouter()
 class LocationData(BaseModel):
     latitude: float
     longitude: float
-
 
 def generate_location_link(phone_number: str):
     """
@@ -138,9 +138,9 @@ def receive_location(link_id: str, location_data: LocationData):
             json.dumps(location_record),
         )
 
-        link_data["used"] = True
-        link_data["used_at"] = datetime.now().isoformat()
-        link_data["status"] = "used"
+        # link_data["used"] = True # TODO: uncomment this when we have a way to track used links
+        # link_data["used_at"] = datetime.now().isoformat() # TODO: uncomment this when we have a way to track used links
+        # link_data["status"] = "used" # TODO: uncomment this when we have a way to track used links
 
         redis_client.setex(
             f"location_link:{link_id}", 60 * 60 * 24, json.dumps(link_data)

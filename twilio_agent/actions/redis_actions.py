@@ -2,13 +2,17 @@ import datetime
 import json
 import logging
 import time
+import os
 
 import starlette.datastructures
 from redis import Redis
 
 logger = logging.getLogger("uvicorn")
 
-redis = Redis(host="localhost", port=6379)
+REDIS_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379")
+redis = Redis.from_url(REDIS_URL)
+
+print(REDIS_URL)
 
 
 def get_intent(call_number: str) -> str:

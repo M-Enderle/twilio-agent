@@ -14,6 +14,8 @@ dotenv.load_dotenv()
 
 account_sid = os.environ["TWILIO_ACCOUNT_SID"]
 auth_token = os.environ["TWILIO_AUTH_TOKEN"]
+server_url = os.environ["SERVER_URL"]
+
 client = Client(account_sid, auth_token)
 
 
@@ -60,23 +62,23 @@ def outbound_call_after_sms(to: str):
             location_data["longitude"], location_data["latitude"]
         )
         save_caller_contact(to, provider, phone)
-        
     with new_response() as response:
         gather = Gather(
             input="speech",
             language="de-DE",
-            action="https://9e4c482f86de.ngrok-free.app/parse-connection-request-towing",
+            action=f"{server_url}/parse-connection-request-towing",
             speechModel="deepgram_nova-3",
             speechTimeout="auto",
         )
-        say(gather, f"Hier ist die Notdienststation. Wie haben deinen Standort erhalten. Der Preis für den Abschleppdienst beträgt {price} Euro. Die Ankunftszeit beträgt ungefähr {duration} Minuten. Möchtest du den Abschleppdienst jetzt beauftragen?")
+        message = f"Hier ist die Notdienststation. Wie haben deinen Standort erhalten. Der Preis für den Abschleppdienst beträgt {price} Euro. Die Ankunftszeit beträgt ungefähr {duration} Minuten. Möchtest du den Abschleppdienst jetzt beauftragen?"
+        say(gather, message)
         response.append(gather)
-        client.calls.create(
+        
+        call = client.calls.create(
             twiml=response,
             to=to,
             from_="+4915888647007",
         )
-
 
 if __name__ == "__main__":
     outbound_call_after_sms(to="+4917657888987")

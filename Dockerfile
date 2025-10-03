@@ -1,74 +1,53 @@
-# Multi-stage Docker build for Twilio Agent
-FROM python:3.10-slim as builder
+# syntax=docker/dockerfile:1
 
-# Set environment variables
+FROM python:3.10-slim AS base
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Poetry
-RUN pip install poetry==1.8.3
-
-# Configure Poetry
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Copy Poetry files
-COPY pyproject.toml poetry.lock ./
-
-# Install dependencies
-RUN poetry install --only=main && rm -rf $POETRY_CACHE_DIR
-
-# Production stage
-FROM python:3.10-slim as production
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH"
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
+# System deps (build tools + libs for matplotlib, Levenshtein, etc.)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential \
+       curl \
+       libffi-dev \
+       zlib1g-dev \
+       libjpeg62-turbo-dev \
+       libfreetype6-dev \
+       libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-WORKDIR /app
+FROM base AS dependencies
 
-# Copy virtual environment from builder stage
-COPY --from=builder /app/.venv /app/.venv
+# Copy full project to build/install via PEP 621
+COPY . .
 
-# Copy application code
-COPY twilio_agent/ /app/twilio_agent/
-COPY data/ /app/data/
-COPY templates/ /app/templates/
-COPY handwerker.yaml /app/
+# Install project and dependencies into system site-packages
+RUN pip install --no-cache-dir .
 
-# Create necessary directories and set permissions
-RUN mkdir -p /app/logs && \
-    chown -R appuser:appuser /app
 
-# Switch to non-root user
+FROM base AS production
+
+# Create non-root user and prepare directories
+RUN useradd -m -u 10001 appuser \
+    && mkdir -p /app/logs \
+    && chown -R appuser:appuser /app
+
+# Copy site-packages and deps layer
+COPY --from=dependencies /usr/local /usr/local
+
+# Copy application source (for static/templates and runtime assets)
+COPY . .
+
 USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Expose port
 EXPOSE 8000
 
-# Start the application
+# Default command: run FastAPI via uvicorn
 CMD ["uvicorn", "twilio_agent.conversation_flow:app", "--host", "0.0.0.0", "--port", "8000"]
+
+

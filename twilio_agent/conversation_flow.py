@@ -61,8 +61,10 @@ async def health_check():
 
 async def caller(request: Request):
     form_data = await request.form()
-    return form_data.get("Caller")
-
+    caller = form_data.get("Caller")
+    if caller == "+4915888647007":
+        return form_data.get("Called")
+    return caller
 
 @app.api_route("/incoming-call", methods=["GET", "POST"])
 async def incoming_call(request: Request):
@@ -477,7 +479,7 @@ async def call_locksmith(request: Request, with_message: bool = True):
             say(response, message)
         hangup = Dial()
         contact = get_caller_contact(await caller(request))
-        phone_number = contact["phone"] if contact else "+4917657888987"
+        phone_number = contact["phone"] if contact else "+4915510118258"
         number = Number(phone_number)
         hangup.append(number)
         response.append(hangup)
@@ -492,7 +494,7 @@ async def call_towing_service(request: Request, with_message: bool = True):
             say(response, message)
         hangup = Dial()
         contact = get_caller_contact(await caller(request))
-        phone_number = contact["phone"] if contact else "+4917657888987"
+        phone_number = contact["phone"] if contact else "+4915510118258"
         number = Number(phone_number)
         hangup.append(number)
         response.append(hangup)

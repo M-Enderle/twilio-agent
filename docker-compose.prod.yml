@@ -7,8 +7,6 @@ services:
     container_name: twilio-agent-app
     ports:
       - "8000:8000"
-    environment:
-      - REDIS_URL=redis://redis:6379
     env_file:
       - .env.production
     depends_on:
