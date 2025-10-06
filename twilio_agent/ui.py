@@ -1,13 +1,14 @@
-from datetime import datetime
+import asyncio
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+import yaml
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from redis import Redis
-
 
 router = APIRouter()
 
@@ -23,71 +24,57 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379")
 redis = Redis.from_url(REDIS_URL)
 
 
-def _scan_active_callers() -> list[dict]:
-    callers: list[dict] = []
-    for key in redis.scan_iter(match="callers:*:info", count=500):
-        try:
-            phone = key.decode("utf-8").split(":")[1]
-            raw = redis.get(key)
-            if not raw:
-                continue
-            info = json.loads(raw.decode("utf-8"))
-            ts_str = info.get("timestamp")
-            callers.append(
-                {
-                    "phone": phone,
-                    "timestamp": ts_str,
-                    "timestamp_sort": _parse_ts(ts_str),
-                }
-            )
-        except Exception:
-            continue
-    # sort desc by time
-    callers.sort(key=lambda c: c["timestamp_sort"], reverse=True)
-    return callers
+@router.get("/details/{number}/{timestamp}", response_class=HTMLResponse)
+def details(number: str, timestamp: str):
+    # Just return the HTML template without Jinja data
+    return jinja_env.get_template("details.html").render(
+        number=number, timestamp=timestamp
+    )
 
 
-def _parse_ts(ts: str) -> float:
+@router.websocket("/ws/details/{number}/{timestamp}")
+async def websocket_details(websocket: WebSocket, number: str, timestamp: str):
+    await websocket.accept()
+
     try:
-        # format like 02.10.2025 13:45:10
-        return datetime.strptime(ts, "%d.%m.%Y %H:%M:%S").timestamp() if ts else 0.0
-    except Exception:
-        return 0.0
+        while True:
+            # Get current data from Redis
+            redis_info = redis.get(f"verlauf:{number}:{timestamp}:info")
+            redis_messages = redis.get(f"verlauf:{number}:{timestamp}:nachrichten")
 
+            if redis_info:
+                info_raw = yaml.safe_load(redis_info.decode("utf-8"))
 
-def _get_call_details(phone: str) -> dict:
-    info_raw = redis.get(f"callers:{phone}:info")
-    messages_raw = redis.get(f"callers:{phone}:messages")
-    contact_raw = redis.get(f"callers:{phone}:contact")
-    location_raw = redis.get(f"callers:{phone}:location")
+                # Convert list of dicts to single dict
+                info = {}
+                if isinstance(info_raw, list):
+                    for item in info_raw:
+                        if isinstance(item, dict):
+                            info.update(item)
+                else:
+                    info = info_raw
 
-    def _loads(raw):
-        return json.loads(raw.decode("utf-8")) if raw else None
+                messages = (
+                    yaml.safe_load(redis_messages.decode("utf-8"))
+                    if redis_messages
+                    else []
+                )
 
-    return {
-        "phone": phone,
-        "info": _loads(info_raw),
-        "messages": _loads(messages_raw) or [],
-        "contact": _loads(contact_raw),
-        "location": _loads(location_raw),
-    }
+                # Send data to client
+                data = {
+                    "info": info,
+                    "messages": messages,
+                    "timestamp": datetime.now().isoformat(),
+                }
+                await websocket.send_json(data)
+            else:
+                # Send error if no data found
+                await websocket.send_json(
+                    {"error": "No data found", "timestamp": datetime.now().isoformat()}
+                )
 
+            # Wait 1 second before next update
+            await asyncio.sleep(1)
 
-@router.get("/ui", response_class=HTMLResponse)
-def calls_list():
-    template = jinja_env.get_template("calls_list.html")
-    calls = _scan_active_callers()
-    return template.render(calls=calls)
-
-
-@router.get("/ui/call/{phone}", response_class=HTMLResponse)
-def call_detail(phone: str):
-    if not phone:
-        raise HTTPException(status_code=400, detail="Missing phone")
-    details = _get_call_details(phone)
-    if not details.get("info") and not details.get("messages"):
-        raise HTTPException(status_code=404, detail="Call not found")
-    template = jinja_env.get_template("call_detail.html")
-    return template.render(call=details)
-
-
+    except WebSocketDisconnect:
+        pass

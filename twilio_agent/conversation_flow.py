@@ -1,41 +1,36 @@
-import datetime
+import asyncio
 import logging
 import os
 
 import dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from twilio.twiml.voice_response import Dial, Gather, Number
+from twilio.twiml.voice_response import Gather
 
-from twilio_agent.actions.location_sharing_actions import router as location_router
-from twilio_agent.actions.redis_actions import (
-    agent_message,
-    ai_message,
-    get_caller_contact,
-    get_intent,
-    get_location,
-    save_caller_contact,
-    save_caller_info,
-    save_location,
-    set_intent,
-    user_message,
-    add_to_caller_queue,
-    get_next_caller_in_queue,
-    save_job_details,
-    set_transferred_to,
-    get_transferred_to,
-)
-from twilio_agent.actions.twilio_actions import (
-    fallback_no_response,
-    new_response,
-    say,
-    send_request,
-    send_sms_with_link,
-    transfer,
-    caller,
-    send_job_details_sms
-)
-from twilio_agent.utils.ai import classify_intent, extract_location, yes_no_question
+from twilio_agent.actions.location_sharing_actions import \
+    router as location_router
+from twilio_agent.actions.redis_actions import (add_to_caller_queue,
+                                                agent_message, ai_message,
+                                                clear_caller_queue,
+                                                delete_next_caller, get_intent,
+                                                get_job_info, get_location,
+                                                get_transferred_to,
+                                                init_new_call, save_job_info,
+                                                save_location, set_intent,
+                                                set_transferred_to,
+                                                twilio_message, user_message,
+                                                get_call_timestamp)
+from twilio_agent.actions.telegram_actions import send_message
+from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
+                                                 new_response, say,
+                                                 send_job_details_sms,
+                                                 send_request,
+                                                 send_sms_with_link,
+                                                 start_transfer)
+from twilio_agent.ui import router as ui_router
+from twilio_agent.utils.ai import (classify_intent, extract_location,
+                                   yes_no_question)
+from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.location_utils import check_location
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
 
@@ -43,8 +38,18 @@ dotenv.load_dotenv()
 
 app = FastAPI()
 app.include_router(location_router)
-from twilio_agent.ui import router as ui_router
 app.include_router(ui_router)
+
+
+class WebSocketLogFilter(logging.Filter):
+    """Filter out noisy websocket connection logs from uvicorn."""
+
+    keywords = ("WebSocket", "connection open", "connection closed")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not any(keyword in message for keyword in self.keywords)
+
 
 # Get uvicorn logger
 logger = logging.getLogger("uvicorn")
@@ -52,11 +57,24 @@ logger = logging.getLogger("uvicorn")
 # Configure logger to include datetime
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+# Attach websocket filter to uvicorn loggers
+websocket_filter = WebSocketLogFilter()
+for name in (
+    "uvicorn",
+    "uvicorn.access",
+    "uvicorn.error",
+    "uvicorn.protocols",
+    "uvicorn.protocols.websockets",
+    "uvicorn.protocols.websockets.wsproto_impl",
+):
+    logging.getLogger(name).addFilter(websocket_filter)
+
 logger.info("Conversation flow started")
+
 
 @app.get("/health")
 async def health_check():
@@ -68,26 +86,79 @@ async def health_check():
     }
 
 
+async def send_telegram_notification(caller_number: str):
+    """Send Telegram notification with live UI link when a new call comes in"""
+    try:
+        # Skip notification for anonymous callers
+        if caller_number == "anonymous":
+            logger.info("Skipping Telegram notification for anonymous caller")
+            return
+            
+        # Get the call timestamp
+        timestamp = get_call_timestamp(caller_number)
+        if not timestamp:
+            logger.error(f"Could not get timestamp for call {caller_number}")
+            return
+        
+        # Format the phone number for the URL (replace + with 00)
+        formatted_number = caller_number.replace('+', '00')
+        
+        # Get the server URL from environment
+        server_url = os.getenv("SERVER_URL", "https://localhost:8000")
+        
+        # Construct the live UI URL
+        live_ui_url = f"{server_url}/details/{formatted_number}/{timestamp}"
+        
+        # Send the Telegram message
+        await send_message(live_ui_url, caller_number)
+        logger.info(f"Telegram notification sent for call {caller_number} - Live UI: {live_ui_url}")
+        
+    except Exception as e:
+        logger.error(f"Error sending Telegram notification for {caller_number}: {e}")
+        # Don't let telegram errors break the call flow
+        pass
+
+
 @app.api_route("/incoming-call", methods=["GET", "POST"])
 async def incoming_call(request: Request):
+    """Start of the Call"""
+    caller_number = await caller(request)
+    init_new_call(caller_number)
 
-    form_data = await request.form()
-    save_caller_info(await caller(request), form_data)
+    # Send Telegram notification with live UI link
+    await send_telegram_notification(caller_number)
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
-    intent = get_intent(await caller(request))
+    intent = get_intent(caller_number)
 
-    previous_transferred_to = get_transferred_to(await caller(request))
-    if previous_transferred_to:
-        return await transfer_call(request, previous_transferred_to)
-    else:
-        match intent:
-            case "schlüsseldienst":
-                return await call_locksmith(request)
-            case "abschleppdienst":
-                return await call_towing_service(request)
-            case _:
-                return await greeting(request)
+    previous_transferred_to = get_transferred_to(caller_number)
+    with new_response() as response:
+        if previous_transferred_to:
+            save_job_info(caller_number, "Zuvor Angerufen", "Ja")
+            save_job_info(
+                caller_number,
+                "Zuvor weitergeileitet an",
+                previous_transferred_to,
+            )
+            with new_response() as response:
+                add_to_caller_queue(caller_number, previous_transferred_to)
+                start_transfer(response, caller_number)
+                return send_request(request, response)
+        else:
+            if intent:
+                save_job_info(caller_number, "Zuvor Angerufen", "Ja")
+                save_job_info(caller_number, "Vorheriges Anliegen", intent)
+            await add_locksmith_contacts(request)
+            match intent:
+                case "schlüsseldienst":
+                    start_transfer(response, caller_number)
+                    return send_request(request, response)
+                case "abschleppdienst":
+                    await add_towing_contacts(request)
+                    start_transfer(response, caller_number)
+                    return send_request(request, response)
+                case _:
+                    return await greeting(request)
 
 
 async def greeting(request: Request):
@@ -136,7 +207,9 @@ async def parse_intent_1(request: Request):
             set_intent(await caller(request), "abschleppdienst")
             return await know_plz_towing(request)
         case "adac" | "mitarbeiter":
-            return await call_locksmith(request)
+            with new_response() as response:
+                start_transfer(response, await caller(request))
+                return send_request(request, response)
         case _:
             return await intent_not_understood(request)
 
@@ -189,7 +262,12 @@ async def parse_intent_2(request: Request):
             set_intent(await caller(request), "abschleppdienst")
             return await know_plz_towing(request)
         case _:
-            return await call_locksmith(request)
+            with new_response() as response:
+                message = "Leider konnte ich dein Anliegen wieder nicht verstehen. Ich verbinde dich mit einem Mitarbeiter."
+                agent_message(await caller(request), message)
+                say(response, message)
+                start_transfer(response, await caller(request))
+                return send_request(request, response)
 
 
 """ Locksmith conversation flow """
@@ -231,7 +309,19 @@ async def parse_location_locksmith(request: Request):
 
     location = extract_location(speech_result)
     logger.info("Location extracted: %s", location)
+
     ai_message(await caller(request), f"<Location extracted: {location}>")
+    location_keys_german = {
+        "plz": "PLZ",
+        "ort": "Ort",
+        "strasse": "Straße",
+        "hausnummer": "Hausnummer",
+    }
+    for key in location:
+        if location[key]:
+            save_job_info(
+                await caller(request), location_keys_german.get(key, key), location[key]
+            )
 
     location_result = check_location(location["plz"], location["ort"])
     with new_response() as response:
@@ -307,7 +397,7 @@ async def parse_location_correct_locksmith(request: Request):
                 numDigits=5,
                 timeout=10,
             )
-            message = "Bitte gib die Postleitzahl auf dem Nummernblock ein oder drücke die einz falls du deine Postleitzahl nicht kennst."       
+            message = "Bitte gib die Postleitzahl auf dem Nummernblock ein oder drücke die einz falls du deine Postleitzahl nicht kennst."
             agent_message(await caller(request), message)
             say(gather, message)
             response.append(gather)
@@ -319,7 +409,7 @@ async def parse_location_correct_locksmith(request: Request):
             )
             say(gather2, "Bitte gib die Postleitzahl erneut ein.")
             response.append(gather2)
-            await fallback_no_response(response, request)   
+            await fallback_no_response(response, request)
             return send_request(request, response)
 
 
@@ -327,33 +417,35 @@ async def parse_location_correct_locksmith(request: Request):
 async def parse_location_numberblock_locksmith(request: Request):
     form_data = await request.form()
     plz = form_data.get("Digits", "")
+    save_job_info(await caller(request), "PLZ Tastatur", plz)
     user_message(await caller(request), plz)
     if len(str(plz)) > 3:
         location_result = check_location(plz, None)
         if location_result:
             save_location(await caller(request), location_result)
             return await calculate_cost_locksmith(request)
-        else:
-            return await call_locksmith(request)
-    else:
-        return await call_locksmith(request)
+    message = "Ich leite dich an den Fahrer weiter."
+    agent_message(await caller(request), message)
+    with new_response() as response:
+        say(response, message)
+        start_transfer(response, await caller(request))
+        return send_request(request, response)
 
 
 async def calculate_cost_locksmith(request: Request):
     location = get_location(await caller(request))
     price, duration, provider, phone = get_price_locksmith(location)
-    save_caller_contact(await caller(request), provider, phone)
-    
-    # Save job details for SMS notification
-    job_details = {
-        "timestamp": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=1))).strftime("%d.%m.%Y %H:%M:%S"),
-        "caller_phone": await caller(request),
-        "address": f"{location.get('place', 'unbekannt')}, {location.get('zipcode', 'unbekannt')}",
-        "price": price,
-        "wait_time": duration
+    german_keys = {
+        "price": "Preis",
+        "duration": "Wartezeit",
+        "provider": "Anbieter",
+        "phone": "Telefon",
     }
-    save_job_details(await caller(request), job_details)
-    
+    for key in ["price", "duration", "provider", "phone"]:
+        save_job_info(await caller(request), german_keys[key], locals()[key])
+
+    await add_locksmith_contacts(request)
+
     with new_response() as response:
         gather = Gather(
             input="speech",
@@ -389,8 +481,12 @@ async def parse_connection_request_locksmith(request: Request):
     connection_request = yes_no_question(speech_result)
     ai_message(await caller(request), f"<Connection request: {connection_request}>")
     if connection_request:
-        return await call_locksmith(request)
+        save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
+        with new_response() as response:
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
     else:
+        save_job_info(await caller(request), "Weiterleitung angefordert", "Nein")
         return await end_call(request)
 
 
@@ -398,6 +494,9 @@ async def parse_connection_request_locksmith(request: Request):
 
 
 async def know_plz_towing(request: Request):
+
+    await add_towing_contacts(request)
+
     with new_response() as response:
         gather = Gather(
             input="speech",
@@ -433,8 +532,10 @@ async def parse_know_plz_towing(request: Request):
     plz_known = yes_no_question(speech_result)
     ai_message(await caller(request), f"<PLZ known: {plz_known}>")
     if plz_known:
+        save_job_info(await caller(request), "PLZ bekannt", "Ja")
         return await ask_plz_towing(request)
     else:
+        save_job_info(await caller(request), "PLZ bekannt", "Nein")
         return await ask_send_sms_towing(request)
 
 
@@ -466,6 +567,8 @@ async def ask_plz_towing(request: Request):
 async def parse_plz_towing(request: Request):
     form_data = await request.form()
     plz = form_data.get("Digits", "")
+    save_job_info(await caller(request), "PLZ Tastatur", plz)
+
     user_message(await caller(request), plz)
     location = check_location(plz, None)
 
@@ -506,6 +609,7 @@ async def parse_plz_towing_retry(request: Request):
     form_data = await request.form()
     plz = form_data.get("Digits", "")
     user_message(await caller(request), plz)
+    save_job_info(await caller(request), "PLZ Tastatur Wiederholung", plz)
     location = check_location(plz, None)
 
     with new_response() as response:
@@ -526,18 +630,15 @@ async def parse_plz_towing_retry(request: Request):
 async def calculate_cost_towing(request: Request):
     location = get_location(await caller(request))
     price, duration, provider, phone = get_price_towing(location)
-    save_caller_contact(await caller(request), provider, phone)
-    
-    # Save job details for SMS notification
-    job_details = {
-        "timestamp": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=1))).strftime("%d.%m.%Y %H:%M:%S"),
-        "caller_phone": await caller(request),
-        "address": f"{location.get('place', 'unbekannt')}, {location.get('zipcode', 'unbekannt')}",
-        "price": price,
-        "wait_time": duration
+    german_keys = {
+        "price": "Preis",
+        "duration": "Wartezeit",
+        "provider": "Anbieter",
+        "phone": "Telefon",
     }
-    save_job_details(await caller(request), job_details)
-    
+    for key in ["price", "duration", "provider", "phone"]:
+        save_job_info(await caller(request), german_keys[key], locals()[key])
+
     with new_response() as response:
         gather = Gather(
             input="speech",
@@ -573,8 +674,12 @@ async def parse_connection_request_towing(request: Request):
     connection_request = yes_no_question(speech_result)
     ai_message(await caller(request), f"<Connection request: {connection_request}>")
     if connection_request:
-        return await call_towing_service(request)
+        save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
+        with new_response() as response:
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
     else:
+        save_job_info(await caller(request), "Weiterleitung angefordert", "Nein")
         return await end_call(request)
 
 
@@ -614,9 +719,16 @@ async def parse_send_sms_towing(request: Request):
     send_sms_request = yes_no_question(speech_result)
     ai_message(await caller(request), f"<Send SMS request: {send_sms_request}>")
     if send_sms_request:
+        save_job_info(await caller(request), "SMS mit Link angefordert", "Ja")
         return await send_sms_towing(request)
     else:
-        return await end_call(request)
+        save_job_info(await caller(request), "SMS mit Link angefordert", "Nein")
+        message = "Kein Problem. Ich leite dich an den Fahrer weiter."
+        agent_message(await caller(request), message)
+        with new_response() as response:
+            say(response, message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
 
 
 async def send_sms_towing(request: Request):
@@ -631,28 +743,23 @@ async def send_sms_towing(request: Request):
 """ Call Handling """
 
 
-async def call_locksmith(request: Request, with_message: bool = True):
-    with new_response() as response:
-        if with_message:
-            message = "Ich verbinde dich jetzt mit dem Monteur. Bitte warte einen Moment."
-            agent_message(await caller(request), message)
-            say(response, message)
-        transfer(response, await caller(request))
-        add_to_caller_queue(await caller(request), "Jan")
-        add_to_caller_queue(await caller(request), "Haas")
-        return send_request(request, response)
+async def add_locksmith_contacts(request: Request):
+    clear_caller_queue(await caller(request))
+    first_contact = get_job_info(await caller(request), "Anbieter") or "Andi"
+    add_to_caller_queue(await caller(request), first_contact)
+    add_to_caller_queue(await caller(request), "Jan")
+    add_to_caller_queue(await caller(request), "Haas")
+    save_job_info(
+        await caller(request), "Anruf Warteschlange", f"{first_contact}, Jan, Haas"
+    )
 
 
-async def call_towing_service(request: Request, with_message: bool = True):
-    with new_response() as response:
-        if with_message:
-            message = "Ich verbinde dich jetzt mit dem Fahrer. Bitte warte einen Moment."
-            agent_message(await caller(request), message)
-            say(response, message)
-        transfer(response, await caller(request), "Markus")
-        add_to_caller_queue(await caller(request), "Nils")
-        add_to_caller_queue(await caller(request), "Ömer")
-        return send_request(request, response)
+async def add_towing_contacts(request: Request):
+    clear_caller_queue(await caller(request))
+    add_to_caller_queue(await caller(request), "Markus")
+    add_to_caller_queue(await caller(request), "Nils")
+    add_to_caller_queue(await caller(request), "Oemer")
+    save_job_info(await caller(request), "Anruf Warteschlange", "Markus, Nils, Ömer")
 
 
 async def end_call(request: Request, with_message: bool = True):
@@ -661,41 +768,53 @@ async def end_call(request: Request, with_message: bool = True):
             message = "Vielen Dank für deinen Anruf. Wir wünschen dir noch einen schönen Tag. Auf Wiederhören!"
             agent_message(await caller(request), message)
             say(response, message)
+        save_job_info(await caller(request), "Agent Anruf beendet", "Ja")
         response.hangup()
         return send_request(request, response)
 
 
 @app.api_route("/status", methods=["GET", "POST"])
 async def status(request: Request):
-    return JSONResponse({"status": "ok"})
+    save_job_info(await caller(request), "Live", "Nein")
+    return JSONResponse(content={"status": "ok"})
+
 
 @app.api_route("/parse-transfer-call/{name}", methods=["GET", "POST"])
 async def parse_transfer_call(request: Request, name: str):
     form_data = await request.form()
+
     logger.info("Transfer call status: %s", form_data.get("DialCallStatus"))
-    with new_response() as response:
-        if form_data.get("DialCallStatus") != "completed":
-            next_caller = get_next_caller_in_queue(await caller(request))
-            if next_caller:
-                transfer(response, await caller(request), next_caller)
-                return send_request(request, response)
-            else:
-                message = "Leider sind aktuell alle Mitarbeiter im Einsatz. Bitte versuche es später erneut."
+    delete_next_caller(await caller(request))
+
+    if form_data.get("DialCallStatus") != "completed":
+        with new_response() as response:
+            twilio_message(
+                await caller(request),
+                f"Weiterleitung an {name} fehlgeschlagen mit Status {form_data.get('DialCallStatus')}",
+            )
+            save_job_info(await caller(request), "Erfolgreich weitergeleitet", "Nein")
+            status = start_transfer(response, await caller(request))
+
+            if status == "no_more_agents":
+                message = "Leider sind alle unsere Mitarbeiter im Gespräch. Bitte rufe später erneut an. Auf Wiederhören!"
                 agent_message(await caller(request), message)
                 say(response, message)
                 response.hangup()
-                return send_request(request, response)
-            
+
+            return send_request(request, response)
+
     logger.info("Successfully transferred call to %s", name)
-    
+    save_job_info(await caller(request), "Erfolgreich weitergeleitet", "Ja")
+    twilio_message(await caller(request), f"Erfolgreich weitergeleitet an {name}")
+
     # Send job details SMS to the person who was transferred to
-    from twilio_agent.utils.contacts import ContactManager
     contact_manager = ContactManager()
     transferred_phone = contact_manager.get_phone(name)
-    if transferred_phone:
-        send_job_details_sms(await caller(request), transferred_phone)
-        logger.info(f"Job details SMS sent to {transferred_phone}")
-        set_transferred_to(await caller(request), transferred_phone)
-    
-    response.hangup()
-    return send_request(request, response)
+    send_job_details_sms(await caller(request), transferred_phone)
+    set_transferred_to(await caller(request), transferred_phone)
+    save_job_info(await caller(request), "Weitergeleitet an", name)
+    logger.info(f"Job details SMS sent to {transferred_phone}")
+
+    with new_response() as response:
+        response.hangup()
+        return send_request(request, response)

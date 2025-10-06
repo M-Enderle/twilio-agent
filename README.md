@@ -88,7 +88,7 @@ Configure these URLs in your Twilio Console:
 │   Twilio API    │───▶│   Nginx Proxy   │───▶│  FastAPI App    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                                          │
-                        ┌─────────────────┐             │
+                        ┌─────────────────┐              │
                         │   Redis Cache   │◀────────────┘
                         └─────────────────┘
 ```

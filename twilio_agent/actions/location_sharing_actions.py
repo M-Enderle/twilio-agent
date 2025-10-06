@@ -1,17 +1,16 @@
 import json
+import logging
 import os
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-import traceback
+
 import dotenv
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 from redis import Redis
-
-
-import logging
 
 logger = logging.getLogger("uvicorn")
 
@@ -46,7 +45,7 @@ def generate_location_link(phone_number: str):
         dict: Contains the link ID, full URL, and expiration time.
     """
     try:
-        new_id = redis_client.incr("location_last_id")
+        new_id = redis_client.incr("standort_letzte_id")
     except Exception:
         raise HTTPException(status_code=500, detail="Error generating location link")
 
@@ -62,7 +61,7 @@ def generate_location_link(phone_number: str):
     }
 
     redis_client.setex(
-        f"location_link:{link_id}",
+        f"standort_link:{link_id}",
         int(timedelta(hours=24).total_seconds()),
         json.dumps(link_data),
     )
@@ -88,7 +87,7 @@ def get_location_page(link_id: str):
         HTMLResponse: The location sharing webpage.
     """
     try:
-        link_data_str = redis_client.get(f"location_link:{link_id}")
+        link_data_str = redis_client.get(f"standort_link:{link_id}")
         if not link_data_str:
             raise HTTPException(status_code=404, detail="Link not found or expired")
 
@@ -121,7 +120,7 @@ def receive_location(link_id: str, location_data: LocationData):
         dict: Success confirmation and stored data info.
     """
     try:
-        link_data_str = redis_client.get(f"location_link:{link_id}")
+        link_data_str = redis_client.get(f"standort_link:{link_id}")
         if not link_data_str:
             raise HTTPException(status_code=404, detail="Link not found or expired")
 
@@ -139,17 +138,23 @@ def receive_location(link_id: str, location_data: LocationData):
         }
 
         redis_client.setex(
-            f"callers:{link_data['phone_number']}:shared_location",
+            f"anrufe:{link_data['phone_number']}:geteilter_standort",
             int(timedelta(days=7).total_seconds()),
             json.dumps(location_record),
         )
 
-        link_data["used"] = True # TODO: uncomment this when we have a way to track used links
-        link_data["used_at"] = datetime.now().isoformat() # TODO: uncomment this when we have a way to track used links
-        link_data["status"] = "used" # TODO: uncomment this when we have a way to track used links
+        link_data["used"] = (
+            True  # TODO: uncomment this when we have a way to track used links
+        )
+        link_data["used_at"] = (
+            datetime.now().isoformat()
+        )  # TODO: uncomment this when we have a way to track used links
+        link_data["status"] = (
+            "used"  # TODO: uncomment this when we have a way to track used links
+        )
 
         redis_client.setex(
-            f"location_link:{link_id}", 60 * 60 * 24, json.dumps(link_data)
+            f"standort_link:{link_id}", 60 * 60 * 24, json.dumps(link_data)
         )
 
         # Trigger outbound call to the phone number associated with the link

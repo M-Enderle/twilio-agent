@@ -2,24 +2,50 @@ import datetime
 import json
 import logging
 import os
-import time
+import zoneinfo
 
-import starlette.datastructures
+import yaml
 from redis import Redis
 
 logger = logging.getLogger("uvicorn")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379")
 redis = Redis.from_url(REDIS_URL)
+tz = zoneinfo.ZoneInfo("Europe/Berlin")
 
-print(REDIS_URL)
+persistance_time = 60 * 60  # 1 hour
+
+
+def _set_hist_info(call_number: str, key: str, value: str) -> str:
+    if call_number == "anonymous":
+        return
+    redis_content = redis.get(
+        f"verlauf:{call_number.replace('+', '00')}:{redis.get(f'anrufe:{call_number}:gestartet_um').decode('utf-8')}:info"
+    )
+    if redis_content:
+        content = yaml.safe_load(redis_content.decode("utf-8"))
+    else:
+        content = []
+    content.append({key: value})
+    redis.set(
+        f"verlauf:{call_number.replace('+', '00')}:{redis.get(f'anrufe:{call_number}:gestartet_um').decode('utf-8')}:info",
+        yaml.dump(content, default_flow_style=False, allow_unicode=True),
+    )
+
+
+def init_new_call(call_number: str):
+    starttime = datetime.datetime.now(tz).strftime("%Y%m%dT%H%M%S")
+    redis.set(f"anrufe:{call_number}:gestartet_um", starttime, ex=persistance_time)
+    _set_hist_info(call_number, "Startzeit", datetime.datetime.now(tz).isoformat())
+    _set_hist_info(call_number, "Anrufnummer", call_number)
+    save_job_info(call_number, "Live", "Ja")
 
 
 def get_intent(call_number: str) -> str:
     try:
         if call_number == "anonymous":
             return None
-        return redis.get(f"callers:{call_number}:intent").decode("utf-8")
+        return redis.get(f"anrufe:{call_number}:anliegen").decode("utf-8")
     except Exception as e:
         return None
 
@@ -27,50 +53,8 @@ def get_intent(call_number: str) -> str:
 def set_intent(call_number: str, intent: str):
     if call_number == "anonymous":
         return
-    redis.set(f"callers:{call_number}:intent", intent, ex=60 * 60 * 24)  # 1 day
-
-
-def save_caller_info(call_number: str, form: starlette.datastructures.FormData):
-    form_data = {k: form.getlist(k) for k in form}
-
-    # check if there is already a caller info
-    existing_caller_info = redis.get(f"callers:{call_number}:info")
-    if existing_caller_info:
-        timestamp = json.loads(existing_caller_info.decode("utf-8"))["timestamp"]
-        conversation = redis.get(f"callers:{call_number}:messages")
-
-        # Only save conversation if it exists and is not None
-        if conversation is not None:
-            redis.set(
-                f"callers:{call_number}:history:{timestamp.replace(':', '.')}:messages",
-                conversation,
-                ex=60 * 60 * 24 * 365,
-            )  # 365 days
-
-        redis.set(
-            f"callers:{call_number}:history:{timestamp.replace(':', '.')}:info",
-            existing_caller_info,
-            ex=60 * 60 * 24 * 365,
-        )  # 365 days
-        redis.delete(f"callers:{call_number}:messages")
-        redis.delete(f"callers:{call_number}:info")
-        redis.delete(f"callers:{call_number}:location")
-        redis.delete(f"callers:{call_number}:contact")
-        redis.delete(f"callers:{call_number}:shared_location")
-        redis.delete(f"callers:{call_number}:job_details")
-        redis.delete(f"callers:{call_number}:queue")
-
-    # add timestamp
-    german_tz = datetime.timezone(datetime.timedelta(hours=1))  # CET
-    form_data["timestamp"] = datetime.datetime.now(german_tz).strftime(
-        "%d.%m.%Y %H:%M:%S"
-    )
-
-    redis.set(
-        f"callers:{call_number}:info",
-        json.dumps(form_data, indent=2),
-        ex=60 * 60 * 24 * 30,
-    )  # 30 days
+    redis.set(f"anrufe:{call_number}:anliegen", intent, ex=persistance_time)
+    _set_hist_info(call_number, "Anliegen", intent)
 
 
 def agent_message(call_number: str, message: str):
@@ -84,95 +68,109 @@ def user_message(call_number: str, message: str):
 
 
 def ai_message(call_number: str, message: str):
-    _save_message(call_number, message, "grok")
-    logger.info("Grok: %s", message)
+    _save_message(call_number, message, "AI")
+    logger.info("AI: %s", message)
+
+
+def twilio_message(call_number: str, message: str):
+    _save_message(call_number, message, "twilio")
+    logger.info("Twilio: %s", message)
 
 
 def _save_message(call_number: str, message: str, role: str):
-    existing_messages = redis.get(f"callers:{call_number}:messages")
+    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    if not start_time:
+        return
+
+    key = f"verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:nachrichten"
+    existing_messages = redis.get(key)
+
     if existing_messages:
-        messages = json.loads(existing_messages.decode("utf-8"))
+        messages = yaml.safe_load(existing_messages.decode("utf-8"))
     else:
         messages = []
 
-    # Add new message to list
     messages.append({"role": role, "content": message})
 
-    # Save updated messages list
     redis.set(
-        f"callers:{call_number}:messages",
-        json.dumps(messages, indent=2, ensure_ascii=False),
-        ex=60 * 60 * 24,
-    )  # 1 day
+        key,
+        yaml.dump(messages, default_flow_style=False, allow_unicode=True),
+    )
 
 
 def save_location(call_number: str, location: dict):
     redis.set(
-        f"callers:{call_number}:location",
+        f"anrufe:{call_number}:standort",
         json.dumps(location, indent=2, ensure_ascii=False),
-        ex=60 * 60 * 24,
-    )  # 1 day
+        ex=persistance_time,
+    )
+    _set_hist_info(call_number, "Standort", location)
 
 
 def get_location(call_number: str) -> dict:
-    return json.loads(redis.get(f"callers:{call_number}:location").decode("utf-8"))
-
-
-def save_caller_contact(call_number: str, name: str, phone: str):
-    redis.set(
-        f"callers:{call_number}:contact",
-        json.dumps({"name": name, "phone": phone}, indent=2, ensure_ascii=False),
-        ex=60 * 60 * 24,
-    )  # 1 day
-
-
-def get_caller_contact(call_number: str) -> dict | None:
-    contact_data = redis.get(f"callers:{call_number}:contact")
-    if contact_data:
-        return json.loads(contact_data.decode("utf-8"))
-    return None
+    return json.loads(redis.get(f"anrufe:{call_number}:standort").decode("utf-8"))
 
 
 def get_shared_location(call_number: str) -> dict:
-    location_data = redis.get(f"callers:{call_number}:shared_location")
+    location_data = redis.get(f"anrufe:{call_number}:geteilter_standort")
     if location_data:
         return json.loads(location_data.decode("utf-8"))
     return None
 
 
 def add_to_caller_queue(caller: str, name: str):
-    redis.lpush(f"callers:{caller}:queue", name)
-    
+    queue = json.loads(redis.get(f"anrufe:{caller}:warteschlange") or b"[]")
+    queue.append(name)
+    redis.set(f"anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
+
+
 def get_next_caller_in_queue(caller: str) -> str:
-    return redis.rpop(f"callers:{caller}:queue")
+    queue_data = redis.get(f"anrufe:{caller}:warteschlange")
+    queue = json.loads(queue_data.decode("utf-8")) if queue_data else []
+    return queue[0] if queue else None
 
 
-def save_job_details(caller: str, job_details: dict):
-    """Save job details for SMS notification"""
-    redis.set(
-        f"callers:{caller}:job_details",
-        json.dumps(job_details, indent=2, ensure_ascii=False),
-        ex=60 * 60 * 24,  # 1 day
-    )
+def delete_next_caller(caller: str):
+    queue = json.loads(redis.get(f"anrufe:{caller}:warteschlange") or b"[]")
+    if queue:
+        queue.pop(0)
+    redis.set(f"anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
 
 
-def get_job_details(caller: str) -> dict | None:
-    """Get job details for SMS notification"""
-    job_data = redis.get(f"callers:{caller}:job_details")
-    if job_data:
-        return json.loads(job_data.decode("utf-8"))
-    return None
+def clear_caller_queue(caller: str):
+    redis.delete(f"anrufe:{caller}:warteschlange")
 
 
 def set_transferred_to(caller: str, transferred_to: str):
-    redis.set(f"callers:{caller}:transferred_to", transferred_to, ex=60 * 60 * 24)  # 1 day
+    redis.set(f"anrufe:{caller}:weitergeleitet_an", transferred_to, ex=persistance_time)
+    _set_hist_info(caller, "Weitergeleitet an", transferred_to)
 
 
 def get_transferred_to(caller: str) -> str | None:
-    return redis.get(f"callers:{caller}:transferred_to")
+    return redis.get(f"anrufe:{caller}:weitergeleitet_an")
 
 
-if __name__ == "__main__":
-    print(get_intent("+4917657888987"))
-    set_intent("+4917657888987", "Schlüsseldienst")
-    print(get_intent("+4917657888987"))
+def save_job_info(caller: str, detail_name: str, detail_value: str):
+    _set_hist_info(caller, detail_name, detail_value)
+    redis.set(f"anrufe:{caller}:{detail_name}", detail_value, ex=persistance_time)
+
+
+def get_job_info(caller: str, detail_name: str) -> str | None:
+    detail = redis.get(f"anrufe:{caller}:{detail_name}")
+    if detail:
+        return detail.decode("utf-8")
+    return None
+
+
+def get_call_timestamp(call_number: str) -> str | None:
+    """Get the timestamp for when a call was started"""
+    try:
+        if call_number == "anonymous":
+            return None
+        timestamp = redis.get(f"anrufe:{call_number}:gestartet_um")
+        if timestamp:
+            return timestamp.decode("utf-8")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting call timestamp: {e}")
+        return None

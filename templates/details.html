@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anruf Details</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', sans-serif;
+      background: #f4f6f9;
+      color: #2d2d2d;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 40px auto;
+      background: #ffffff;
+      border-radius: 20px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+
+    .header {
+      padding: 28px 24px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-align: center;
+      position: relative;
+    }
+
+    .back-btn {
+      position: absolute;
+      left: 24px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: white;
+      text-decoration: none;
+      font-size: 24px;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+
+    .back-btn:hover {
+      opacity: 0.8;
+    }
+
+    .call-status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      margin-top: 12px;
+    }
+
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      position: relative;
+    }
+
+    .status-indicator.live {
+      background: #22c55e;
+      box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+      animation: pulse-live 2s infinite;
+    }
+
+    .status-indicator.ended {
+      background: #ef4444;
+    }
+
+    .status-indicator.connecting {
+      background: #f59e0b;
+      animation: pulse-connecting 1s infinite;
+    }
+
+    @keyframes pulse-live {
+      0% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+      }
+    }
+
+    @keyframes pulse-connecting {
+      0% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.5;
+      }
+      100% {
+        opacity: 1;
+      }
+    }
+
+    .status-text {
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 12px;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .header .meta {
+      margin-top: 8px;
+      font-size: 14px;
+      opacity: 0.9;
+    }
+
+    .content {
+      padding: 32px 24px;
+    }
+
+    .call-info {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px 24px;
+      margin-bottom: 32px;
+      background: #fafafa;
+      padding: 20px;
+      border-radius: 16px;
+      border: 1px solid #e6e6e6;
+    }
+
+    .call-info p {
+      margin: 0;
+      font-size: 13px;
+      padding: 3px 6px;
+      border-radius: 10px;
+    }
+
+    .call-info strong {
+      font-weight: 600;
+      color: #007aff;
+    }
+
+    .call-info a {
+      color: #007aff;
+      text-decoration: none;
+    }
+
+    .call-info a:hover {
+      text-decoration: underline;
+    }
+
+    .transcript-section h2 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      color: #2d2d2d;
+    }
+
+    .chat-container {
+      background-color: #f9fafc;
+      border-radius: 16px;
+      padding: 20px;
+    }
+
+    .message {
+      margin-bottom: 18px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .message-bubble {
+      max-width: 70%;
+      padding: 14px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      line-height: 1.5;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+
+    .message.user {
+      align-items: flex-end;
+    }
+
+    .message.user .message-bubble {
+      background: #007aff;
+      color: #ffffff;
+      border-bottom-right-radius: 6px;
+    }
+
+    .message.assistant,
+    .message.grok,
+    .message.AI {
+      align-items: flex-start;
+    }
+
+    .message.assistant .message-bubble {
+      background: #e5e7eb;
+      color: #2d2d2d;
+      border-bottom-left-radius: 6px;
+    }
+
+    .message.grok .message-bubble,
+    .message.AI .message-bubble {
+      background: #ede9fe;
+      color: #2d2d2d;
+      border-left: 4px solid #a855f7;
+      border-bottom-left-radius: 6px;
+    }
+
+    .message.twilio {
+      align-items: flex-start;
+    }
+
+    .message.twilio .message-bubble {
+      background: #fefce8;
+      color: #2d2d2d;
+      border-left: 4px solid #eab308;
+      border-bottom-left-radius: 6px;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: #6b7280;
+      font-style: italic;
+      padding: 40px 20px;
+      background: #f8f9fa;
+      border-radius: 12px;
+      border: 2px dashed #e5e7eb;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 16px;
+    }
+
+    .info-card {
+      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      padding: 16px;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .info-card h3 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #475569;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .loading-state {
+      text-align: center;
+      color: #6b7280;
+      padding: 40px 20px;
+      background: #f8f9fa;
+      border-radius: 12px;
+    }
+
+    .error-state {
+      text-align: center;
+      color: #ef4444;
+      padding: 40px 20px;
+      background: #fef2f2;
+      border-radius: 12px;
+      border: 1px solid #fecaca;
+    }
+
+    @media (max-width: 600px) {
+      .container {
+        margin: 20px;
+        border-radius: 16px;
+      }
+
+      .header {
+        padding: 20px 24px;
+      }
+
+      .content {
+        padding: 20px;
+      }
+
+      .call-info {
+        padding: 16px;
+        grid-template-columns: 1fr;
+      }
+
+      .chat-container {
+        padding: 16px;
+      }
+
+      .message-bubble {
+        font-size: 12px;
+        max-width: 85%;
+      }
+
+      .back-btn {
+        font-size: 20px;
+        left: 16px;
+      }
+
+      .call-status {
+        font-size: 12px;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+      }
+
+      .status-text {
+        font-size: 11px;
+      }
+    }
+  </style>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 id="call-title">Lade Anrufdetails...</h1>
+      
+      <!-- Call Status Indicator -->
+      <div class="call-status">
+        <div id="status-indicator" class="status-indicator connecting"></div>
+        <span id="status-text" class="status-text">Verbinde...</span>
+      </div>
+    </div>
+    
+    <div class="content">
+      <div id="loading-state" class="loading-state">
+        <div>Lade Anrufdetails...</div>
+      </div>
+      
+      <div id="error-state" class="error-state" style="display: none;">
+        <div>Fehler beim Laden der Daten</div>
+      </div>
+      
+      <div id="call-info" class="call-info" style="display: none;">
+        <!-- Call info will be populated by JavaScript -->
+      </div>
+      
+      <div id="transcript-section" class="transcript-section" style="display: none;">
+        <h2>Gesprächsverlauf</h2>
+        <div id="chat-container" class="chat-container">
+          <!-- Messages will be populated by JavaScript -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Get URL parameters
+    const pathParts = window.location.pathname.split('/');
+    const number = pathParts[2];
+    const timestamp = pathParts[3];
+    
+    // WebSocket connection
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/details/${number}/${timestamp}`;
+    let ws;
+    let reconnectInterval;
+
+    function connectWebSocket() {
+      ws = new WebSocket(wsUrl);
+      
+      ws.onopen = function(event) {
+        console.log('WebSocket connected');
+        clearInterval(reconnectInterval);
+        updateConnectionStatus('connecting');
+      };
+      
+      ws.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        
+        if (data.error) {
+          showError(data.error);
+          return;
+        }
+        
+        updateUI(data);
+      };
+      
+      ws.onclose = function(event) {
+        console.log('WebSocket closed');
+        updateConnectionStatus('disconnected');
+        
+        // Attempt to reconnect every 3 seconds
+        reconnectInterval = setInterval(() => {
+          console.log('Attempting to reconnect...');
+          connectWebSocket();
+        }, 3000);
+      };
+      
+      ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+        updateConnectionStatus('error');
+      };
+    }
+    
+    function updateConnectionStatus(status) {
+      const indicator = document.getElementById('status-indicator');
+      const statusText = document.getElementById('status-text');
+      
+      indicator.className = 'status-indicator';
+      
+      switch(status) {
+        case 'connecting':
+          indicator.classList.add('connecting');
+          statusText.textContent = 'Verbinde...';
+          break;
+        case 'disconnected':
+        case 'error':
+          indicator.classList.add('ended');
+          statusText.textContent = 'Verbindung getrennt';
+          break;
+      }
+    }
+    
+    function updateUI(data) {
+      const { info, messages } = data;
+      
+      // Hide loading state
+      document.getElementById('loading-state').style.display = 'none';
+      document.getElementById('error-state').style.display = 'none';
+      
+      // Update title
+      document.getElementById('call-title').textContent = 
+        info.call_number ? `Anruf von ${info.call_number}` : 'Anruf Details';
+      
+      // Update status
+      const indicator = document.getElementById('status-indicator');
+      const statusText = document.getElementById('status-text');
+      
+      indicator.className = 'status-indicator';
+      if (info.Live === 'Ja') {
+        indicator.classList.add('live');
+        statusText.textContent = 'Live';
+      } else {
+        indicator.classList.add('ended');
+        statusText.textContent = 'Beendet';
+      }
+      
+      // Update call info
+      updateCallInfo(info);
+      
+      // Update messages
+      updateMessages(messages);
+    }
+    
+    function updateCallInfo(info) {
+      const callInfoDiv = document.getElementById('call-info');
+      callInfoDiv.innerHTML = '';
+      
+      if (Object.keys(info).length > 0) {
+        callInfoDiv.style.display = 'block';
+        
+        for (const [key, value] of Object.entries(info)) {
+          // Skip individual PLZ and Ort fields since they're combined in Standort
+          if (value != null && value !== '' && key !== 'call_number' && key !== 'PLZ' && key !== 'Ort') {
+            const p = document.createElement('p');
+            p.innerHTML = `<strong>${key}:</strong> ${formatValue(key, value)}`;
+            callInfoDiv.appendChild(p);
+          }
+        }
+      }
+    }
+    
+    function updateMessages(messages) {
+      const transcriptSection = document.getElementById('transcript-section');
+      const chatContainer = document.getElementById('chat-container');
+      
+      chatContainer.innerHTML = '';
+      
+      if (messages && messages.length > 0) {
+        transcriptSection.style.display = 'block';
+        
+        messages.forEach(message => {
+          const messageDiv = document.createElement('div');
+          messageDiv.className = `message ${message.role}`;
+          
+          const bubble = document.createElement('div');
+          bubble.className = 'message-bubble';
+          bubble.textContent = message.content;
+          
+          messageDiv.appendChild(bubble);
+          chatContainer.appendChild(messageDiv);
+        });
+      } else {
+        transcriptSection.style.display = 'block';
+        const emptyState = document.createElement('div');
+        emptyState.className = 'empty-state';
+        emptyState.textContent = 'Noch keine Nachrichten im Gespräch';
+        chatContainer.appendChild(emptyState);
+      }
+    }
+    
+
+    
+    function formatValue(key, value) {
+
+      
+      if (key === 'Standort' && value) {
+        // Handle object location data
+        if (typeof value === 'object' && value !== null) {
+          const plz = value.plz || value.zipcode || '';
+          const ort = value.ort || value.city || value.place || '';
+          const strasse = value.strasse || value.street || '';
+          const hausnummer = value.hausnummer || value.house_number || '';
+          
+          let address = '';
+          if (strasse && hausnummer) {
+            address += `${strasse} ${hausnummer}, `;
+          }
+          if (plz && ort) {
+            address += `${plz} ${ort}`;
+          } else if (ort) {
+            address += ort;
+          } else if (plz) {
+            address += plz;
+          }
+          
+          return address || 'Nicht verfügbar';
+        }
+        // Handle coordinate string
+        if (typeof value === 'string' && value.includes(',')) {
+          const coords = value.split(',');
+          return `<a href="https://maps.google.com/?q=${coords[0]},${coords[1]}" target="_blank">Koordinaten anzeigen</a>`;
+        }
+        return value;
+      }
+      
+      if (key === 'Startzeit' && value) {
+        try {
+          const date = new Date(value);
+          const options = {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            timeZoneName: 'short'
+          };
+          return date.toLocaleDateString('de-DE', options);
+        } catch (e) {
+          return value;
+        }
+      }
+      
+      if (key === 'Preis' && value) {
+        return `${value} €`;
+      }
+      
+      if (key === 'Wartezeit' && value) {
+        return `${value} Min`;
+      }
+      
+      return value || '';
+    }
+    
+    function showError(errorMessage) {
+      document.getElementById('loading-state').style.display = 'none';
+      document.getElementById('call-info').style.display = 'none';
+      document.getElementById('transcript-section').style.display = 'none';
+      
+      const errorState = document.getElementById('error-state');
+      errorState.style.display = 'block';
+      errorState.innerHTML = `<div>${errorMessage}</div>`;
+    }
+    
+    // Start WebSocket connection
+    connectWebSocket();
+    
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', function() {
+      if (ws) {
+        ws.close();
+      }
+      if (reconnectInterval) {
+        clearInterval(reconnectInterval);
+      }
+    });
+  </script>
+</body>
+</html>
+
+

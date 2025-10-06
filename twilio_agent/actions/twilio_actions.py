@@ -1,16 +1,19 @@
+import logging
 import os
 from contextlib import contextmanager
-import logging
 
 import dotenv
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from twilio.rest import Client
-from twilio.twiml.voice_response import Connect, Dial, Gather, Number, VoiceResponse
+from twilio.twiml.voice_response import (Connect, Dial, Gather, Number,
+                                         VoiceResponse)
 
-from twilio_agent.actions.redis_actions import get_shared_location, save_caller_contact
-from twilio_agent.utils.pricing import get_price_towing_coordinates
+from twilio_agent.actions.redis_actions import (get_job_info,
+                                                get_next_caller_in_queue,
+                                                get_shared_location)
 from twilio_agent.utils.contacts import ContactManager
+from twilio_agent.utils.pricing import get_price_towing_coordinates
 
 contact_manager = ContactManager()
 
@@ -57,7 +60,8 @@ def say(obj, text: str):
 
 def send_sms_with_link(to: str):
     # Create location sharing link with caller parameter
-    from twilio_agent.actions.location_sharing_actions import generate_location_link
+    from twilio_agent.actions.location_sharing_actions import \
+        generate_location_link
 
     location_link = generate_location_link(phone_number=to)["link_url"]
 
@@ -78,7 +82,10 @@ def outbound_call_after_sms(to: str):
         price, duration, provider, phone = get_price_towing_coordinates(
             location_data["longitude"], location_data["latitude"]
         )
-        save_caller_contact(to, provider, phone)
+        for key in ["price", "duration", "provider", "phone"]:
+            if not locals()[key]:
+                logger.error(f"Missing {key} for towing service")
+                return
     with new_response() as response:
         gather = Gather(
             input="speech",
@@ -106,10 +113,10 @@ def outbound_call_after_sms(to: str):
             response,
             "Leider konnte ich keine Eingabe erkennen. Ich verbinde dich mit einem Mitarbeiter.",
         )
-        transfer(response, to)
+        start_transfer(response, to)
         response.append(gather)
 
-        call = client.calls.create(
+        client.calls.create(
             twiml=response,
             to=to,
             from_="+4915888647007",
@@ -121,25 +128,22 @@ async def fallback_no_response(response: VoiceResponse, request: Request):
         response,
         "Leider konnte ich keine Eingabe erkennen. Ich verbinde dich mit einem Mitarbeiter.",
     )
-    transfer(response, await caller(request))
 
 
 def send_job_details_sms(caller: str, transferred_to: str):
     """Send SMS with job details to the person who was transferred to"""
-    from twilio_agent.actions.redis_actions import get_job_details
+
+    location = get_job_info(caller, "location")
+    if not location:
+        location = {}
+
+    message_body = f"""Anrufdetails:
     
-    job_details = get_job_details(caller)
-    if not job_details:
-        logger.warning(f"No job details found for caller {caller}")
-        return
-    
-    message_body = f"""📋 Auftragsdetails {job_details.get('timestamp', 'unbekannt')}
-    
-📞 Anrufer: {job_details.get('caller_phone', 'unbekannt')}
-📍 Erkannte Adresse: {job_details.get('address', 'unbekannt')}
-💰 Genannter Preis: {job_details.get('price', 'unbekannt')} Euro
-⏰ Genannte Wartezeit: {job_details.get('wait_time', 'unbekannt')} Minuten"""
-    
+📞 Anrufer: {caller}
+📍 Erkannter Ort: {location.get('zipcode')} {location.get('place')}
+💰 Genannter Preis: {get_job_info(caller, 'price')} Euro
+⏰ Genannte Wartezeit: {get_job_info(caller, 'duration')} Minuten"""
+
     client.messages.create(
         body=message_body,
         from_=twilio_phone_number,
@@ -148,22 +152,12 @@ def send_job_details_sms(caller: str, transferred_to: str):
     logger.info(f"Job details SMS sent to {transferred_to}")
 
 
-def transfer(response: VoiceResponse, caller: str, name: str = None):
-    if not name:
-        from twilio_agent.actions.redis_actions import get_caller_contact
-        contact = get_caller_contact(caller)
-        if contact:
-            name = contact["name"]
-        else:
-            name = "Andi"
-    if isinstance(name, bytes):
-        name = name.decode('utf-8')
-    tr = Dial(action=f"{server_url}/parse-transfer-call/{name}", timeout=10)
-    phone_number = contact_manager.get_phone(name)
-    logger.info(f"Transferring call to {name} with phone number {phone_number}")
+def start_transfer(response: VoiceResponse, caller: str) -> str:
+    next_caller = get_next_caller_in_queue(caller)
+    if not next_caller:
+        return "no_more_agents"
+    tr = Dial(action=f"{server_url}/parse-transfer-call/{next_caller}", timeout=10)
+    phone_number = contact_manager.get_phone(next_caller)
     tr.append(Number(phone_number))
     response.append(tr)
-    
-
-if __name__ == "__main__":
-    outbound_call_after_sms(to="+4917657888987")
+    return "transferring"
