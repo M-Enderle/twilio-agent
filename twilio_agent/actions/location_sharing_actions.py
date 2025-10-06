@@ -2,13 +2,18 @@ import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-
+import traceback
 import dotenv
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 from redis import Redis
+
+
+import logging
+
+logger = logging.getLogger("uvicorn")
 
 dotenv.load_dotenv()
 STANDORT_URL = os.getenv("STANDORT_URL", "https://9e4c482f86de.ngrok-free.app/location")
@@ -139,9 +144,9 @@ def receive_location(link_id: str, location_data: LocationData):
             json.dumps(location_record),
         )
 
-        # link_data["used"] = True # TODO: uncomment this when we have a way to track used links
-        # link_data["used_at"] = datetime.now().isoformat() # TODO: uncomment this when we have a way to track used links
-        # link_data["status"] = "used" # TODO: uncomment this when we have a way to track used links
+        link_data["used"] = True # TODO: uncomment this when we have a way to track used links
+        link_data["used_at"] = datetime.now().isoformat() # TODO: uncomment this when we have a way to track used links
+        link_data["status"] = "used" # TODO: uncomment this when we have a way to track used links
 
         redis_client.setex(
             f"location_link:{link_id}", 60 * 60 * 24, json.dumps(link_data)
@@ -159,7 +164,11 @@ def receive_location(link_id: str, location_data: LocationData):
             "received_at": datetime.now().isoformat(),
         }
 
-    except HTTPException:
+    except HTTPException as e:
+        logger.error(f"HTTPException: {e}")
+        logger.error(traceback.format_exc())
         raise
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error processing location data: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Error processing location data")

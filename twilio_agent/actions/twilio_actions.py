@@ -90,6 +90,7 @@ def outbound_call_after_sms(to: str):
         )
         message = f"Hier ist die Notdienststation. Wie haben deinen Standort erhalten. Der Preis für den Abschleppdienst beträgt {price} Euro. Die Ankunftszeit beträgt ungefähr {duration} Minuten. Möchtest du den Abschleppdienst jetzt beauftragen?"
         say(gather, message)
+        response.append(gather)
         gather2 = Gather(
             input="speech",
             language="de-DE",
@@ -101,7 +102,11 @@ def outbound_call_after_sms(to: str):
         say(gather2, "Bitte sagen Sie Ja oder Nein.")
         response.append(gather2)
 
-        fallback_no_response(response)
+        say(
+            response,
+            "Leider konnte ich keine Eingabe erkennen. Ich verbinde dich mit einem Mitarbeiter.",
+        )
+        transfer(response, to)
         response.append(gather)
 
         call = client.calls.create(
@@ -119,6 +124,30 @@ async def fallback_no_response(response: VoiceResponse, request: Request):
     transfer(response, await caller(request))
 
 
+def send_job_details_sms(caller: str, transferred_to: str):
+    """Send SMS with job details to the person who was transferred to"""
+    from twilio_agent.actions.redis_actions import get_job_details
+    
+    job_details = get_job_details(caller)
+    if not job_details:
+        logger.warning(f"No job details found for caller {caller}")
+        return
+    
+    message_body = f"""📋 Auftragsdetails {job_details.get('timestamp', 'unbekannt')}
+    
+📞 Anrufer: {job_details.get('caller_phone', 'unbekannt')}
+📍 Erkannte Adresse: {job_details.get('address', 'unbekannt')}
+💰 Genannter Preis: {job_details.get('price', 'unbekannt')} Euro
+⏰ Genannte Wartezeit: {job_details.get('wait_time', 'unbekannt')} Minuten"""
+    
+    client.messages.create(
+        body=message_body,
+        from_=twilio_phone_number,
+        to=transferred_to,
+    )
+    logger.info(f"Job details SMS sent to {transferred_to}")
+
+
 def transfer(response: VoiceResponse, caller: str, name: str = None):
     if not name:
         from twilio_agent.actions.redis_actions import get_caller_contact
@@ -127,13 +156,14 @@ def transfer(response: VoiceResponse, caller: str, name: str = None):
             name = contact["name"]
         else:
             name = "Andi"
-    logger.info(f"Transferring call to {name}")
-    tr = Dial(action=f"{server_url}/parse-transfer-call/{name}", timeout=13)
+    if isinstance(name, bytes):
+        name = name.decode('utf-8')
+    tr = Dial(action=f"{server_url}/parse-transfer-call/{name}", timeout=10)
     phone_number = contact_manager.get_phone(name)
     logger.info(f"Transferring call to {name} with phone number {phone_number}")
     tr.append(Number(phone_number))
     response.append(tr)
-
+    
 
 if __name__ == "__main__":
     outbound_call_after_sms(to="+4917657888987")

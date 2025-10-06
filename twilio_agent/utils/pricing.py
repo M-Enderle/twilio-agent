@@ -94,7 +94,7 @@ def _price(duration_seconds: int, tiers, fallback):
 def _service_price(origin: routing_v2.Waypoint, intent: str, tiers, fallback):
     provider, _, duration = _closest_provider(origin, intent)
     price, minutes = _price(duration, tiers, fallback)
-    return price, minutes, provider["name"], provider["phone"]
+    return price, max(minutes, 10), provider["name"], provider["phone"]
 
 
 def get_price_locksmith(location: dict):

@@ -1,5 +1,8 @@
 import yaml
 from typing import Dict
+import logging
+
+logger = logging.getLogger("uvicorn")
 
 
 class ContactManager:
@@ -32,8 +35,10 @@ class ContactManager:
 # Example usage
 contacts = ContactManager()
 
-print("All contacts:")
+logger.info("All contacts:")
 for name, phone in contacts.get_all_contacts().items():
-    print(f"  {name}: {phone}")
+    logger.info(f"  {name}: {phone}")
 
 print(f"\nAndi's phone: {contacts.get_phone('Andi')}")
+
+logger.info(f"\nAndi's phone: {contacts.get_phone('Andi')}")

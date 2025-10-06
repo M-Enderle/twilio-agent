@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 
@@ -20,6 +21,9 @@ from twilio_agent.actions.redis_actions import (
     user_message,
     add_to_caller_queue,
     get_next_caller_in_queue,
+    save_job_details,
+    set_transferred_to,
+    get_transferred_to,
 )
 from twilio_agent.actions.twilio_actions import (
     fallback_no_response,
@@ -28,7 +32,8 @@ from twilio_agent.actions.twilio_actions import (
     send_request,
     send_sms_with_link,
     transfer,
-    caller
+    caller,
+    send_job_details_sms
 )
 from twilio_agent.utils.ai import classify_intent, extract_location, yes_no_question
 from twilio_agent.utils.location_utils import check_location
@@ -38,11 +43,20 @@ dotenv.load_dotenv()
 
 app = FastAPI()
 app.include_router(location_router)
+from twilio_agent.ui import router as ui_router
+app.include_router(ui_router)
 
 # Get uvicorn logger
 logger = logging.getLogger("uvicorn")
-logger.info("Conversation flow started")
 
+# Configure logger to include datetime
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger.info("Conversation flow started")
 
 @app.get("/health")
 async def health_check():
@@ -55,30 +69,25 @@ async def health_check():
 
 
 @app.api_route("/incoming-call", methods=["GET", "POST"])
-async def test(request: Request):
-    with new_response() as response:
-        transfer(response, await caller(request), "Andi")
-        add_to_caller_queue(await caller(request), "Nils")
-        return send_request(request, response)
-
-@app.api_route("/incoming-call2", methods=["GET", "POST"])
 async def incoming_call(request: Request):
 
     form_data = await request.form()
     save_caller_info(await caller(request), form_data)
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
-    intent = get_intent(await caller(request))  # TODO: Check this
+    intent = get_intent(await caller(request))
 
-    intent = None  # TODO: Test remove !!!!!!
-
-    match intent:
-        case "schlüsseldienst":
-            return await call_locksmith(request)
-        case "abschleppdienst":
-            return await call_towing_service(request)
-        case _:
-            return await greeting(request)
+    previous_transferred_to = get_transferred_to(await caller(request))
+    if previous_transferred_to:
+        return await transfer_call(request, previous_transferred_to)
+    else:
+        match intent:
+            case "schlüsseldienst":
+                return await call_locksmith(request)
+            case "abschleppdienst":
+                return await call_towing_service(request)
+            case _:
+                return await greeting(request)
 
 
 async def greeting(request: Request):
@@ -91,8 +100,7 @@ async def greeting(request: Request):
             speechTimeout="auto",
             timeout=15,
         )
-        # message = "Hallo, Schön das du bei uns anrufst. Du sprichst mit dem Assistent der Notdienststation, ich verbinde dich gleich mit dem richtigen Ansprechpartner! Wie kann ich dir helfen?"
-        message = "Hi"  # TODO: Test
+        message = "Hallo, Schön das du bei uns anrufst. Du sprichst mit dem Assistent der Notdienststation, ich verbinde dich gleich mit dem richtigen Ansprechpartner! Wie kann ich dir helfen?"
         say(gather, message)
         agent_message(await caller(request), message)
         response.append(gather)
@@ -335,6 +343,17 @@ async def calculate_cost_locksmith(request: Request):
     location = get_location(await caller(request))
     price, duration, provider, phone = get_price_locksmith(location)
     save_caller_contact(await caller(request), provider, phone)
+    
+    # Save job details for SMS notification
+    job_details = {
+        "timestamp": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=1))).strftime("%d.%m.%Y %H:%M:%S"),
+        "caller_phone": await caller(request),
+        "address": f"{location.get('place', 'unbekannt')}, {location.get('zipcode', 'unbekannt')}",
+        "price": price,
+        "wait_time": duration
+    }
+    save_job_details(await caller(request), job_details)
+    
     with new_response() as response:
         gather = Gather(
             input="speech",
@@ -508,6 +527,17 @@ async def calculate_cost_towing(request: Request):
     location = get_location(await caller(request))
     price, duration, provider, phone = get_price_towing(location)
     save_caller_contact(await caller(request), provider, phone)
+    
+    # Save job details for SMS notification
+    job_details = {
+        "timestamp": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=1))).strftime("%d.%m.%Y %H:%M:%S"),
+        "caller_phone": await caller(request),
+        "address": f"{location.get('place', 'unbekannt')}, {location.get('zipcode', 'unbekannt')}",
+        "price": price,
+        "wait_time": duration
+    }
+    save_job_details(await caller(request), job_details)
+    
     with new_response() as response:
         gather = Gather(
             input="speech",
@@ -637,8 +667,6 @@ async def end_call(request: Request, with_message: bool = True):
 
 @app.api_route("/status", methods=["GET", "POST"])
 async def status(request: Request):
-    print(await request.form())
-    logger.info("Status callback from Twilio: %s", await request.form())
     return JSONResponse({"status": "ok"})
 
 @app.api_route("/parse-transfer-call/{name}", methods=["GET", "POST"])
@@ -655,6 +683,19 @@ async def parse_transfer_call(request: Request, name: str):
                 message = "Leider sind aktuell alle Mitarbeiter im Einsatz. Bitte versuche es später erneut."
                 agent_message(await caller(request), message)
                 say(response, message)
-                return await end_call(request, with_message=False)
+                response.hangup()
+                return send_request(request, response)
+            
     logger.info("Successfully transferred call to %s", name)
-    return await end_call(request, with_message=False)
+    
+    # Send job details SMS to the person who was transferred to
+    from twilio_agent.utils.contacts import ContactManager
+    contact_manager = ContactManager()
+    transferred_phone = contact_manager.get_phone(name)
+    if transferred_phone:
+        send_job_details_sms(await caller(request), transferred_phone)
+        logger.info(f"Job details SMS sent to {transferred_phone}")
+        set_transferred_to(await caller(request), transferred_phone)
+    
+    response.hangup()
+    return send_request(request, response)

@@ -17,7 +17,7 @@ print(REDIS_URL)
 
 def get_intent(call_number: str) -> str:
     try:
-        if call_number == "anonymous":  # TODO: Check this
+        if call_number == "anonymous":
             return None
         return redis.get(f"callers:{call_number}:intent").decode("utf-8")
     except Exception as e:
@@ -25,7 +25,7 @@ def get_intent(call_number: str) -> str:
 
 
 def set_intent(call_number: str, intent: str):
-    if call_number == "anonymous":  # TODO: Check this
+    if call_number == "anonymous":
         return
     redis.set(f"callers:{call_number}:intent", intent, ex=60 * 60 * 24)  # 1 day
 
@@ -56,6 +56,9 @@ def save_caller_info(call_number: str, form: starlette.datastructures.FormData):
         redis.delete(f"callers:{call_number}:info")
         redis.delete(f"callers:{call_number}:location")
         redis.delete(f"callers:{call_number}:contact")
+        redis.delete(f"callers:{call_number}:shared_location")
+        redis.delete(f"callers:{call_number}:job_details")
+        redis.delete(f"callers:{call_number}:queue")
 
     # add timestamp
     german_tz = datetime.timezone(datetime.timedelta(hours=1))  # CET
@@ -142,6 +145,31 @@ def add_to_caller_queue(caller: str, name: str):
     
 def get_next_caller_in_queue(caller: str) -> str:
     return redis.rpop(f"callers:{caller}:queue")
+
+
+def save_job_details(caller: str, job_details: dict):
+    """Save job details for SMS notification"""
+    redis.set(
+        f"callers:{caller}:job_details",
+        json.dumps(job_details, indent=2, ensure_ascii=False),
+        ex=60 * 60 * 24,  # 1 day
+    )
+
+
+def get_job_details(caller: str) -> dict | None:
+    """Get job details for SMS notification"""
+    job_data = redis.get(f"callers:{caller}:job_details")
+    if job_data:
+        return json.loads(job_data.decode("utf-8"))
+    return None
+
+
+def set_transferred_to(caller: str, transferred_to: str):
+    redis.set(f"callers:{caller}:transferred_to", transferred_to, ex=60 * 60 * 24)  # 1 day
+
+
+def get_transferred_to(caller: str) -> str | None:
+    return redis.get(f"callers:{caller}:transferred_to")
 
 
 if __name__ == "__main__":
