@@ -11,7 +11,10 @@ from twilio.twiml.voice_response import (Connect, Dial, Gather, Number,
 
 from twilio_agent.actions.redis_actions import (get_job_info,
                                                 get_next_caller_in_queue,
-                                                get_shared_location)
+                                                get_shared_location,
+                                                agent_message,
+                                                user_message,
+                                                save_job_info)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.pricing import get_price_towing_coordinates
 
@@ -78,6 +81,10 @@ def send_sms_with_link(to: str):
 
 def outbound_call_after_sms(to: str):
     location_data = get_shared_location(to)
+    save_job_info(to, "Longitude", location_data["longitude"])
+    save_job_info(to, "Latitude", location_data["latitude"])
+    save_job_info(to, "Google Maps Link", f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}")
+    user_message(to, f"Standort: <a href='https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}'>Geteilter Standort</a>")
     if location_data:
         price, duration, provider, phone = get_price_towing_coordinates(
             location_data["longitude"], location_data["latitude"]
@@ -97,6 +104,7 @@ def outbound_call_after_sms(to: str):
         )
         message = f"Hier ist die Notdienststation. Wie haben deinen Standort erhalten. Der Preis für den Abschleppdienst beträgt {price} Euro. Die Ankunftszeit beträgt ungefähr {duration} Minuten. Möchtest du den Abschleppdienst jetzt beauftragen?"
         say(gather, message)
+        agent_message(to, message)
         response.append(gather)
         gather2 = Gather(
             input="speech",
