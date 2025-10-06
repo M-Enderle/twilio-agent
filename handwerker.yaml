@@ -1,29 +1,29 @@
 locksmith:
   - name: "Andi"
     zipcode: 87509
-    phone: "+491728588845"
+    phone: "+4917657888987"
   - name: "Tiberius"
     zipcode: 83022
-    phone: "+4915901372803"
+    phone: "+4917657888987"
   - name: "Marcel"
     zipcode: 32105 
-    phone: "+491747490227"
+    phone: "+4917657888987"
   - name: "Jan"
     zipcode: 87509
-    phone: "+491701023418"
+    phone: "+4917657888987"
     fallback: true
   - name: "Haas"
     zipcode: 87629 
-    phone: "+491748157863"
+    phone: "+4917657888987"
     fallback: true
     
 towing:
   - name: "Markus"
     zipcode: 87509
-    phone: "+4915172513609"
+    phone: "+4917657888987"
   - name: "Nils"
     zipcode: 87509
-    phone: "+491723076615"
-  - name: "Ömer"
+    phone: "+4917657888987"
+  - name: "Oemer"
     zipcode: 87509
-    phone: "+491719570469"
+    phone: "+4917657888987"
