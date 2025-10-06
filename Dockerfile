@@ -48,6 +48,6 @@ USER appuser
 EXPOSE 8000
 
 # Default command: run FastAPI via uvicorn
-CMD ["uvicorn", "twilio_agent.conversation_flow:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "twilio_agent.conversation_flow:app", "--host", "0.0.0.0", "--port", "8000", "--ws", "auto", "--workers", "4"]
 
 

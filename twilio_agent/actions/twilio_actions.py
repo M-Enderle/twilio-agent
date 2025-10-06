@@ -133,16 +133,15 @@ async def fallback_no_response(response: VoiceResponse, request: Request):
 def send_job_details_sms(caller: str, transferred_to: str):
     """Send SMS with job details to the person who was transferred to"""
 
-    location = get_job_info(caller, "location")
+    location = get_job_info(caller, "standort")
     if not location:
         location = {}
 
     message_body = f"""Anrufdetails:
-    
 📞 Anrufer: {caller}
 📍 Erkannter Ort: {location.get('zipcode')} {location.get('place')}
-💰 Genannter Preis: {get_job_info(caller, 'price')} Euro
-⏰ Genannte Wartezeit: {get_job_info(caller, 'duration')} Minuten"""
+💰 Genannter Preis: {get_job_info(caller, 'Preis')} Euro
+⏰ Genannte Wartezeit: {get_job_info(caller, 'Wartezeit')} Minuten"""
 
     client.messages.create(
         body=message_body,
