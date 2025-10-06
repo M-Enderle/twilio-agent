@@ -430,6 +430,58 @@
       }
     }
     
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function escapeAttribute(str) {
+      return escapeHtml(str).replace(/`/g, '&#96;');
+    }
+
+    function linkifyText(raw) {
+      if (raw == null || raw === '') {
+        return '';
+      }
+
+      const text = String(raw);
+      const urlRegex = /((?:https?:\/\/|www\.)[^\s<>"]+)/gi;
+      let result = '';
+      let lastIndex = 0;
+      let match;
+
+      while ((match = urlRegex.exec(text)) !== null) {
+        const [original] = match;
+        const start = match.index;
+        const end = start + original.length;
+
+        // Add preceding non-link text
+        result += escapeHtml(text.slice(lastIndex, start));
+
+        // Handle trailing punctuation that shouldn't be part of the link
+        let linkText = original;
+        let trailing = '';
+        while (/[,.;:!?)]$/.test(linkText) && linkText.length > 0) {
+          trailing = linkText.slice(-1) + trailing;
+          linkText = linkText.slice(0, -1);
+        }
+
+        const normalizedHref = linkText.startsWith('http') ? linkText : `https://${linkText}`;
+        const safeHref = /^https?:\/\//i.test(normalizedHref) ? normalizedHref : `https://${linkText.replace(/^\/+/, '')}`;
+
+        result += `<a href="${escapeAttribute(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkText)}</a>${escapeHtml(trailing)}`;
+
+        lastIndex = end;
+      }
+
+      result += escapeHtml(text.slice(lastIndex));
+      return result;
+    }
+
     function updateUI(data) {
       const { info, messages } = data;
       
@@ -494,7 +546,7 @@
           
           const bubble = document.createElement('div');
           bubble.className = 'message-bubble';
-          bubble.textContent = message.content;
+          bubble.innerHTML = linkifyText(message.content);
           
           messageDiv.appendChild(bubble);
           chatContainer.appendChild(messageDiv);
@@ -533,14 +585,20 @@
             address += plz;
           }
           
-          return address || 'Nicht verfügbar';
+          return address ? linkifyText(address) : 'Nicht verfügbar';
         }
         // Handle coordinate string
         if (typeof value === 'string' && value.includes(',')) {
           const coords = value.split(',');
-          return `<a href="https://maps.google.com/?q=${coords[0]},${coords[1]}" target="_blank">Koordinaten anzeigen</a>`;
+          const lat = coords[0] ? coords[0].trim() : '';
+          const lng = coords[1] ? coords[1].trim() : '';
+          if (lat && lng) {
+            const url = `https://maps.google.com/?q=${encodeURIComponent(`${lat},${lng}`)}`;
+            return `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">Koordinaten anzeigen</a>`;
+          }
+          return linkifyText(value);
         }
-        return value;
+        return linkifyText(value);
       }
       
       if (key === 'Startzeit' && value) {
@@ -569,7 +627,15 @@
         return `${value} Min`;
       }
       
-      return value || '';
+      if (Array.isArray(value)) {
+        return linkifyText(value.join(', '));
+      }
+
+      if (value != null) {
+        return linkifyText(String(value));
+      }
+
+      return '';
     }
     
     function showError(errorMessage) {
