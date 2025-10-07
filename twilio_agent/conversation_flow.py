@@ -1,11 +1,10 @@
-import asyncio
 import logging
-import os
 
 import dotenv
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse, Response
 from twilio.twiml.voice_response import Gather
+import asyncio
 
 from twilio_agent.actions.location_sharing_actions import \
     router as location_router
@@ -19,20 +18,25 @@ from twilio_agent.actions.redis_actions import (add_to_caller_queue,
                                                 save_location, set_intent,
                                                 set_transferred_to,
                                                 twilio_message, user_message,
-                                                get_call_timestamp)
+                                                get_call_timestamp,
+                                                save_call_recording,
+                                                get_call_recording_binary)
 from twilio_agent.actions.telegram_actions import send_telegram_notification
 from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
                                                  new_response, say,
                                                  send_job_details_sms,
                                                  send_request,
                                                  send_sms_with_link,
-                                                 start_transfer)
+                                                 start_transfer,
+                                                 start_recording)
 from twilio_agent.ui import router as ui_router
 from twilio_agent.utils.ai import (classify_intent, extract_location,
                                    yes_no_question)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.location_utils import check_location
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
+import httpx
+import os
 
 dotenv.load_dotenv()
 
@@ -90,10 +94,15 @@ async def health_check():
 async def incoming_call(request: Request):
     """Start of the Call"""
     caller_number = await caller(request)
+    form_data = await request.form()
+
     init_new_call(caller_number)
 
     # Send Telegram notification with live UI link
-    await send_telegram_notification(caller_number)
+    live_url = await send_telegram_notification(caller_number)
+    logger.info(f"Telegram live UI URL: {live_url}")
+
+    asyncio.create_task(start_recording(form_data.get('CallSid'), caller_number))
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
     intent = get_intent(caller_number)
@@ -785,3 +794,54 @@ async def parse_transfer_call(request: Request, name: str):
     with new_response() as response:
         response.hangup()
         return send_request(request, response)
+
+
+@app.api_route("/recording-status-callback/{caller}", methods=["GET", "POST"])
+async def recording_status_callback(request: Request, caller: str):
+    form_data = await request.form()
+    original_caller = caller
+    if caller and caller.startswith("00"):
+        original_caller = "+" + caller[2:]
+
+    recording_url = form_data.get("RecordingUrl")
+    if recording_url and form_data.get("RecordingStatus") == "completed":
+        
+        media_url = recording_url.replace(".json", ".mp3")
+        logger.info("Downloading recording from %s", media_url)
+        
+        # Download the recording using Twilio credentials
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+        auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                media_url,
+                auth=(account_sid, auth_token)
+            )
+            
+            if response.status_code == 200:
+                recording_data = response.content
+                content_type = response.headers.get("Content-Type", "audio/mpeg")
+                save_call_recording(original_caller, recording_data, content_type)
+                logger.info(
+                    "Recording downloaded and stored for %s (%d bytes)",
+                    original_caller,
+                    len(recording_data),
+                )
+            else:
+                logger.error(
+                    "Failed to download recording for %s. Status: %s",
+                    original_caller,
+                    response.status_code,
+                )
+    
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/recordings/{number}/{timestamp}")
+async def fetch_recording(number: str, timestamp: str):
+    audio_bytes, content_type = get_call_recording_binary(number, timestamp)
+    if not audio_bytes:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    return Response(content=audio_bytes, media_type=content_type)

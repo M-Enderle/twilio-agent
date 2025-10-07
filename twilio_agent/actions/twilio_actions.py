@@ -17,6 +17,9 @@ from twilio_agent.actions.redis_actions import (get_job_info,
                                                 save_job_info)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.pricing import get_price_towing_coordinates
+import time
+import asyncio
+import logging
 
 contact_manager = ContactManager()
 
@@ -30,6 +33,21 @@ twilio_phone_number = os.environ["TWILIO_PHONE_NUMBER"]
 
 client = Client(account_sid, auth_token)
 
+twilio_logger = logging.getLogger('twilio.http_client')
+twilio_logger.setLevel(logging.WARNING)
+
+httpx_logger = logging.getLogger('httpx')
+httpx_logger.setLevel(logging.WARNING)
+
+
+async def start_recording(call_sid: str, caller: str):
+    await asyncio.sleep(2)
+
+    recording = client.calls(call_sid).recordings.create(
+        recording_status_callback=server_url + f"/recording-status-callback/{caller.replace('+', '00')}",
+        recording_status_callback_event="completed"
+    )
+    logger.info(f"Started recording for call {call_sid}: {recording.sid}")
 
 async def caller(request: Request):
     form_data = await request.form()

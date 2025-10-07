@@ -4,33 +4,25 @@ import dotenv
 import os
 from datetime import datetime
 import pytz
+from twilio_agent.actions.redis_actions import get_call_timestamp
 
 dotenv.load_dotenv()
 
-async def send_telegram_notification(caller_number: str):
+async def send_telegram_notification(caller_number: str) -> str:
     """Send Telegram notification with live UI link when a new call comes in"""
     try:
         if caller_number == "anonymous":
-            logger.info("Skipping Telegram notification for anonymous caller")
             return
             
         timestamp = get_call_timestamp(caller_number)
-        if not timestamp:
-            logger.error(f"Could not get timestamp for call {caller_number}")
-            return
-        
         formatted_number = caller_number.replace('+', '00')
-        
         server_url = os.getenv("SERVER_URL", "https://localhost:8000")
-        
         live_ui_url = f"{server_url}/details/{formatted_number}/{timestamp}"
-        
         await send_message(live_ui_url, caller_number)
-        logger.info(f"Telegram notification sent for call {caller_number} - Live UI: {live_ui_url}")
+        return live_ui_url
         
     except Exception as e:
-        logger.error(f"Error sending Telegram notification for {caller_number}: {e}")
-        pass
+        return ""
 
 async def send_message(tracking_url: str, phone: str):
     # Replace with your bot token

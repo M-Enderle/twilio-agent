@@ -1,3 +1,4 @@
+import base64
 import datetime
 import json
 import logging
@@ -178,3 +179,64 @@ def get_call_timestamp(call_number: str) -> str | None:
     except Exception as e:
         logger.error(f"Error getting call timestamp: {e}")
         return None
+
+
+def save_call_recording(call_number: str, recording_bytes: bytes, content_type: str = "audio/mpeg"):
+    if not call_number or not recording_bytes or call_number == "anonymous":
+        return
+
+    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    if not start_time:
+        return
+
+    key_suffix = start_time.decode("utf-8")
+    recording_payload = json.dumps(
+        {
+            "content_type": content_type,
+            "data": base64.b64encode(recording_bytes).decode("ascii"),
+        }
+    )
+
+    redis.set(
+        f"verlauf:{call_number.replace('+', '00')}:{key_suffix}:recording",
+        recording_payload,
+        ex=persistance_time,
+    )
+
+    save_job_info(call_number, "Audioaufnahme", "Verfügbar")
+
+
+def get_call_recording(number: str, timestamp: str):
+    if not number or not timestamp:
+        return None
+
+    redis_key = f"verlauf:{number}:{timestamp}:recording"
+    recording_data = redis.get(redis_key)
+
+    if not recording_data:
+        return None
+
+    try:
+        return json.loads(recording_data.decode("utf-8"))
+    except Exception as exc:
+        logger.error("Failed to load recording for %s at %s: %s", number, timestamp, exc)
+        return None
+
+
+def get_call_recording_binary(number: str, timestamp: str):
+    """Return decoded audio bytes and content type for a stored recording."""
+    payload = get_call_recording(number, timestamp)
+    if not payload:
+        return None, None
+
+    data_field = payload.get("data")
+    if not data_field:
+        return None, None
+
+    try:
+        audio_bytes = base64.b64decode(data_field)
+    except Exception as exc:
+        logger.error("Failed to decode recording for %s at %s: %s", number, timestamp, exc)
+        return None, None
+
+    return audio_bytes, payload.get("content_type", "audio/mpeg")

@@ -10,6 +10,8 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from redis import Redis
 
+from twilio_agent.actions.redis_actions import get_call_recording
+
 router = APIRouter()
 
 
@@ -60,10 +62,17 @@ async def websocket_details(websocket: WebSocket, number: str, timestamp: str):
                     else []
                 )
 
+                # Check for recording
+                recording = get_call_recording(number, timestamp)
+                if recording:
+                    recording['number'] = number
+                    recording['timestamp'] = timestamp
+
                 # Send data to client
                 data = {
                     "info": info,
                     "messages": messages,
+                    "recording": recording,
                     "timestamp": datetime.now().isoformat(),
                 }
                 await websocket.send_json(data)

@@ -131,7 +131,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 12px 24px;
-      margin-bottom: 32px;
+      margin-bottom: 10px;
       background: #fafafa;
       padding: 20px;
       border-radius: 16px;
@@ -279,8 +279,9 @@
 
     @media (max-width: 600px) {
       .container {
-        margin: 20px;
-        border-radius: 16px;
+        margin: 0;
+        border-radius: 0;
+        min-height: 100vh;
       }
 
       .header {
@@ -351,6 +352,10 @@
       
       <div id="call-info" class="call-info" style="display: none;">
         <!-- Call info will be populated by JavaScript -->
+      </div>
+      
+      <div id="audio-player" style="display: none; margin-top: 10px;">
+        <!-- Audio player will be populated by JavaScript -->
       </div>
       
       <div id="transcript-section" class="transcript-section" style="display: none;">
@@ -483,7 +488,7 @@
     }
 
     function updateUI(data) {
-      const { info, messages } = data;
+      const { info, messages, recording } = data;
       
       // Hide loading state
       document.getElementById('loading-state').style.display = 'none';
@@ -509,6 +514,9 @@
       // Update call info
       updateCallInfo(info);
       
+      // Update audio player
+      updateAudioPlayer(recording);
+      
       // Update messages
       updateMessages(messages);
     }
@@ -528,6 +536,28 @@
             callInfoDiv.appendChild(p);
           }
         }
+      }
+    }
+    
+    function updateAudioPlayer(recording) {
+      const audioPlayerDiv = document.getElementById('audio-player');
+      
+      if (recording && audioPlayerDiv.children.length === 0) {
+        audioPlayerDiv.style.display = 'block';
+        
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.preload = 'metadata';
+        audio.style.width = '100%';
+        
+        const source = document.createElement('source');
+        source.src = `/recordings/${recording.number}/${recording.timestamp}`;
+        source.type = recording.content_type || 'audio/mpeg';
+        
+        audio.appendChild(source);
+        audioPlayerDiv.appendChild(audio);
+      } else if (!recording) {
+        audioPlayerDiv.style.display = 'none';
       }
     }
     
