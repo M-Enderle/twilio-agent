@@ -182,7 +182,10 @@ def get_call_timestamp(call_number: str) -> str | None:
 
 
 def save_call_recording(
-    call_number: str, recording_bytes: bytes, content_type: str = "audio/mpeg"
+    call_number: str,
+    recording_bytes: bytes,
+    content_type: str = "audio/mpeg",
+    metadata: dict | None = None,
 ):
     if not call_number or not recording_bytes or call_number == "anonymous":
         return
@@ -192,17 +195,27 @@ def save_call_recording(
         return
 
     key_suffix = start_time.decode("utf-8")
-    recording_payload = json.dumps(
-        {
-            "content_type": content_type,
-            "data": base64.b64encode(recording_bytes).decode("ascii"),
-        }
-    )
+    logger.info(f"Saving recording for {call_number} with key verlauf:{call_number.replace('+', '00')}:{key_suffix}:recording, size: {len(recording_bytes)} bytes")
+    payload_obj = {
+        "content_type": content_type,
+        "data": base64.b64encode(recording_bytes).decode("ascii"),
+    }
+    if metadata:
+        payload_obj["metadata"] = metadata
+
+    if metadata and "duration_total_seconds" in metadata:
+        logger.info(
+            "Saving recording for %s (total_duration=%ss, bytes=%d)",
+            call_number,
+            metadata.get("duration_total_seconds"),
+            len(recording_bytes),
+        )
+
+    recording_payload = json.dumps(payload_obj)
 
     redis.set(
         f"verlauf:{call_number.replace('+', '00')}:{key_suffix}:recording",
         recording_payload,
-        ex=persistance_time,
     )
 
     save_job_info(call_number, "Audioaufnahme", "Verfügbar")
@@ -212,6 +225,8 @@ def get_call_recording(number: str, timestamp: str):
     if not number or not timestamp:
         return None
 
+    number = number.replace('+', '00')
+
     redis_key = f"verlauf:{number}:{timestamp}:recording"
     recording_data = redis.get(redis_key)
 
@@ -219,7 +234,8 @@ def get_call_recording(number: str, timestamp: str):
         return None
 
     try:
-        return json.loads(recording_data.decode("utf-8"))
+        payload = json.loads(recording_data.decode("utf-8"))
+        return payload
     except Exception as exc:
         logger.error(
             "Failed to load recording for %s at %s: %s", number, timestamp, exc

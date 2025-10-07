@@ -143,7 +143,7 @@ def outbound_call_after_sms(to: str):
             from_="+4915888647007",
             record=True,
             recording_status_callback_method="POST",
-            recording_status_callback=f"{server_url}/recording-complete/{to.replace('+', '00')}",
+            recording_status_callback=f"{server_url}/recording-status-callback/{to.replace('+', '00')}",
             recording_status_callback_event="completed"
         )
 

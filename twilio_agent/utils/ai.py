@@ -117,7 +117,7 @@ def classify_intent(spoken_text: str) -> tuple[str, float]:
     classification, duration = classify(
         spoken_text,
         ["schlüsseldienst", "abschleppdienst", "adac", "mitarbeiter", "andere"],
-        additional_info="Die Kategorie adac darf nur gewählt werden wenn im text explizit ADAC genannt wird oder eine abkürzung die ähnlich klingt!",
+        additional_info="Die Kategorie adac darf nur gewählt werden wenn im text explizit ADAC genannt wird oder eine abkürzung die ähnlich klingt! Die Eingab",
         examples={
             "adac": [
                 "Hallo, hier ist Susanne vom ADAC. Wir haben einen Kunden mit einem problem bezüglich seines Autos.",
@@ -135,6 +135,7 @@ def classify_intent(spoken_text: str) -> tuple[str, float]:
                 "Ich hab mich ausgesperrt",
                 "Mein Schlüssel ist abgebrochen",
                 "Ich komm nicht in meine Wohnung rein",
+                "Hallo, wollen sie Fragen für die Tour öffnen, wie viel Kostet?"
             ],
             "mitarbeiter": ["Ich möchte sofort mit einem Mitarbeiter sprechen"],
         },
