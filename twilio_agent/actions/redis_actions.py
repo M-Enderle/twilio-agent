@@ -67,9 +67,13 @@ def user_message(call_number: str, message: str):
     logger.info("User message: %s", message)
 
 
-def ai_message(call_number: str, message: str):
-    _save_message(call_number, message, "AI")
-    logger.info("AI: %s", message)
+def ai_message(call_number: str, message: str, duration: float = None):
+    if duration is not None:
+        message_with_timing = f"{message} (took {duration:.3f}s)"
+    else:
+        message_with_timing = message
+    _save_message(call_number, message_with_timing, "AI")
+    logger.info("AI: %s", message_with_timing)
 
 
 def twilio_message(call_number: str, message: str):

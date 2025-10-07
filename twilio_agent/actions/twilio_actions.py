@@ -84,7 +84,7 @@ def outbound_call_after_sms(to: str):
     save_job_info(to, "Longitude", location_data["longitude"])
     save_job_info(to, "Latitude", location_data["latitude"])
     save_job_info(to, "Google Maps Link", f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}")
-    user_message(to, f"Standort: <a href='https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}'>Geteilter Standort</a>")
+    user_message(to, f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}")
     if location_data:
         price, duration, provider, phone = get_price_towing_coordinates(
             location_data["longitude"], location_data["latitude"]

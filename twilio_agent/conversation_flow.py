@@ -20,7 +20,7 @@ from twilio_agent.actions.redis_actions import (add_to_caller_queue,
                                                 set_transferred_to,
                                                 twilio_message, user_message,
                                                 get_call_timestamp)
-from twilio_agent.actions.telegram_actions import send_message
+from twilio_agent.actions.telegram_actions import send_telegram_notification
 from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
                                                  new_response, say,
                                                  send_job_details_sms,
@@ -84,39 +84,6 @@ async def health_check():
         "service": "twilio-agent",
         "timestamp": "2025-10-02T00:00:00Z",
     }
-
-
-async def send_telegram_notification(caller_number: str):
-    """Send Telegram notification with live UI link when a new call comes in"""
-    try:
-        # Skip notification for anonymous callers
-        if caller_number == "anonymous":
-            logger.info("Skipping Telegram notification for anonymous caller")
-            return
-            
-        # Get the call timestamp
-        timestamp = get_call_timestamp(caller_number)
-        if not timestamp:
-            logger.error(f"Could not get timestamp for call {caller_number}")
-            return
-        
-        # Format the phone number for the URL (replace + with 00)
-        formatted_number = caller_number.replace('+', '00')
-        
-        # Get the server URL from environment
-        server_url = os.getenv("SERVER_URL", "https://localhost:8000")
-        
-        # Construct the live UI URL
-        live_ui_url = f"{server_url}/details/{formatted_number}/{timestamp}"
-        
-        # Send the Telegram message
-        await send_message(live_ui_url, caller_number)
-        logger.info(f"Telegram notification sent for call {caller_number} - Live UI: {live_ui_url}")
-        
-    except Exception as e:
-        logger.error(f"Error sending Telegram notification for {caller_number}: {e}")
-        # Don't let telegram errors break the call flow
-        pass
 
 
 @app.api_route("/incoming-call", methods=["GET", "POST"])
@@ -197,8 +164,8 @@ async def parse_intent_1(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    classification = classify_intent(speech_result)
-    ai_message(await caller(request), f"<Request classified as {classification}>")
+    classification, duration = classify_intent(speech_result)
+    ai_message(await caller(request), f"<Request classified as {classification}>", duration)
     match classification:
         case "schlüsseldienst":
             set_intent(await caller(request), "schlüsseldienst")
@@ -252,8 +219,8 @@ async def parse_intent_2(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    classification = classify_intent(speech_result)
-    ai_message(await caller(request), f"<Request classified as {classification}>")
+    classification, duration = classify_intent(speech_result)
+    ai_message(await caller(request), f"<Request classified as {classification}>", duration)
     match classification:
         case "schlüsseldienst":
             set_intent(await caller(request), "schlüsseldienst")
@@ -307,10 +274,10 @@ async def parse_location_locksmith(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
 
-    location = extract_location(speech_result)
+    location, duration = extract_location(speech_result)
     logger.info("Location extracted: %s", location)
 
-    ai_message(await caller(request), f"<Location extracted: {location}>")
+    ai_message(await caller(request), f"<Location extracted: {location}>", duration)
     location_keys_german = {
         "plz": "PLZ",
         "ort": "Ort",
@@ -385,7 +352,7 @@ async def parse_location_locksmith(request: Request):
 async def parse_location_correct_locksmith(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
-    correct = yes_no_question(speech_result)
+    correct, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob die Adresse korrekt ist.")
     user_message(await caller(request), speech_result)
     with new_response() as response:
         if correct:
@@ -478,8 +445,8 @@ async def parse_connection_request_locksmith(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    connection_request = yes_no_question(speech_result)
-    ai_message(await caller(request), f"<Connection request: {connection_request}>")
+    connection_request, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte.")
+    ai_message(await caller(request), f"<Connection request: {connection_request}>", duration)
     if connection_request:
         save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
         with new_response() as response:
@@ -529,8 +496,8 @@ async def parse_know_plz_towing(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    plz_known = yes_no_question(speech_result)
-    ai_message(await caller(request), f"<PLZ known: {plz_known}>")
+    plz_known, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er die Postleitzahl des Ortes kennt.")
+    ai_message(await caller(request), f"<PLZ known: {plz_known}>", duration)
     if plz_known:
         save_job_info(await caller(request), "PLZ bekannt", "Ja")
         return await ask_plz_towing(request)
@@ -671,8 +638,8 @@ async def parse_connection_request_towing(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    connection_request = yes_no_question(speech_result)
-    ai_message(await caller(request), f"<Connection request: {connection_request}>")
+    connection_request, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte.")
+    ai_message(await caller(request), f"<Connection request: {connection_request}>", duration)
     if connection_request:
         save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
         with new_response() as response:
@@ -716,8 +683,8 @@ async def parse_send_sms_towing(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    send_sms_request = yes_no_question(speech_result)
-    ai_message(await caller(request), f"<Send SMS request: {send_sms_request}>")
+    send_sms_request, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er eine SMS mit dem Link erhalten möchte.")
+    ai_message(await caller(request), f"<Send SMS request: {send_sms_request}>", duration)
     if send_sms_request:
         save_job_info(await caller(request), "SMS mit Link angefordert", "Ja")
         return await send_sms_towing(request)

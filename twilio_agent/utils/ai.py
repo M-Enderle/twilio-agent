@@ -34,7 +34,7 @@ def classify(
     fallback: str = "andere",
     additional_info: str = "",
     examples: dict = None,
-) -> str:
+) -> tuple[str, float]:
     """Classify spoken text into one of the provided categories
 
     Args:
@@ -70,49 +70,53 @@ def classify(
         duration = time.time() - start_time
         logger.info(f"Classification completed in {duration:.3f}s")
 
-        return result
+        return result, duration
 
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error classifying request after {duration:.3f}s: {e}")
-        return fallback
+        return fallback, duration
 
 
-def yes_no_question(spoken_text: str) -> bool:
+def yes_no_question(spoken_text: str, context: str) -> tuple[bool, float]:
     """Determine if spoken text represents agreement or disagreement
 
     Args:
         spoken_text: The text to analyze for yes/no response
 
     Returns:
-        True if the text indicates agreement, False otherwise
+        Tuple of (True if the text indicates agreement, False otherwise, response time in seconds)
     """
     if not spoken_text:
-        return False
+        return False, 0.0
 
+    start_time = time.time()
     try:
         system_prompt = "Du bist ein Ja/Nein Klassifikationssystem. Analysiere die Eingabe und bestimme, ob sie eine Zustimmung (Ja) oder Ablehnung (Nein) ausdrückt. Berücksichtige auch Varianten wie 'ja', 'richtig', 'korrekt', 'stimmt', 'genau' für Ja und 'nein', 'falsch', 'nicht richtig', 'stimmt nicht' für Nein. Antworte ausschließlich mit 'Ja' oder 'Nein'."
         user_prompt = (
-            f"Ist diese Aussage eine Zustimmung oder Ablehnung? Text: '{spoken_text}'"
+            f"Ist diese Aussage eine Zustimmung oder Ablehnung? Text: '{spoken_text}'. Kontext der Fragestellung: '{context}'"
         )
 
         response = _ask_grok(system_prompt, user_prompt)
-        return response == "Ja"
+        duration = time.time() - start_time
+        logger.info(f"Yes/No question completed in {duration:.3f}s")
+        return response == "Ja", duration
     except Exception as e:
-        print(f"Error classifying request: {e}")
-        return False
+        duration = time.time() - start_time
+        logger.error(f"Error classifying yes/no question after {duration:.3f}s: {e}")
+        return False, duration
 
 
-def classify_intent(spoken_text: str) -> str:
+def classify_intent(spoken_text: str) -> tuple[str, float]:
     """Classify the intent of the spoken text
 
     Args:
         spoken_text: The text to classify
 
     Returns:
-        The classified intent
+        Tuple of (classified intent, response time in seconds)
     """
-    classification = classify(
+    classification, duration = classify(
         spoken_text,
         ["schlüsseldienst", "abschleppdienst", "adac", "mitarbeiter", "andere"],
         additional_info="Die Kategorie adac darf nur gewählt werden wenn im text explizit ADAC genannt wird oder eine abkürzung die ähnlich klingt!",
@@ -137,24 +141,39 @@ def classify_intent(spoken_text: str) -> str:
             "mitarbeiter": ["Ich möchte sofort mit einem Mitarbeiter sprechen"],
         },
     )
-    return classification
+    return classification, duration
 
 
-def extract_location(spoken_text: str) -> str:
+def extract_location(spoken_text: str) -> tuple[dict, float]:
     """Extract the location from the spoken text
     Args:
         spoken_text: The text to extract the location from
     Returns:
-        The extracted location
+        Tuple of (extracted location dict, response time in seconds)
     """
-    user_prompt = f"Extrahiere den Ort aus dieser Anfrage: {spoken_text}. Gebe ein json zurück, ohne ```json und ```. Das json sollte die folgenden keys haben: 'plz', 'ort', 'strasse', 'hausnummer'."
-    result = _ask_grok("", user_prompt)
-    return json.loads(result)
+    start_time = time.time()
+    try:
+        user_prompt = f"""Extrahiere den Ort aus dieser Anfrage: {spoken_text}. 
+        Gebe ein json zurück, ohne ```json und ```. 
+        Das json sollte die folgenden keys haben: 'plz', 'ort', 'strasse', 'hausnummer'.
+        
+        Beispiele:
+        - "Johann Wilhelm Klein Straße 5 1 9 4 4 6 9 Deggendorf" -> {'plz': '94469', 'ort': 'Deggendorf', 'strasse': 'Johann Wilhelm Klein Straße', 'hausnummer': '51'}
+        - "Hauptstraße 7 9 8 2 1 3 9 Salzburg" -> {'plz': '98213', 'ort': 'Salzburg', 'strasse': 'Hauptstraße', 'hausnummer': '7'}
+        """
+        result = _ask_grok("", user_prompt)
+        duration = time.time() - start_time
+        logger.info(f"Location extraction completed in {duration:.3f}s")
+        return json.loads(result), duration
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"Error extracting location after {duration:.3f}s: {e}")
+        return {"plz": "", "ort": "", "strasse": "", "hausnummer": ""}, duration
 
 
 if __name__ == "__main__":
     # Test case 1: Valid classification
-    result = classify(
+    result, _ = classify(
         "Ich brauche einen Schlüsseldienst",
         ["Schlüsseldienst", "Abschleppdienst"],
         "andere",
@@ -162,9 +181,9 @@ if __name__ == "__main__":
     print(f"Test 1 - Expected: Schlüsseldienst, Got: {result}")
 
     # Test case 2: Yes/No question with positive response
-    result = yes_no_question("Ja, das ist richtig")
+    result, _ = yes_no_question("Ja, das ist richtig")
     print(f"Test 2 - Expected: True, Got: {result}")
 
     # Test case 3: Empty input handling
-    result = classify("", ["Schlüsseldienst", "Abschleppdienst"], "Andere")
+    result, _ = classify("", ["Schlüsseldienst", "Abschleppdienst"], "Andere")
     print(f"Test 3 - Expected: Andere, Got: {result}")
