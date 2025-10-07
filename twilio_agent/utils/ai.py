@@ -5,6 +5,10 @@ import time
 
 from xai_sdk import Client
 from xai_sdk.chat import system, user
+import dotenv
+import traceback
+
+dotenv.load_dotenv()
 
 logger = logging.getLogger("uvicorn")
 
@@ -49,7 +53,7 @@ def classify(
     start_time = time.time()
 
     if not spoken_text or not choices:
-        return fallback
+        return fallback, -1.0
 
     try:
         choices_str = "', '".join(choices)
@@ -117,7 +121,7 @@ def classify_intent(spoken_text: str) -> tuple[str, float]:
     classification, duration = classify(
         spoken_text,
         ["schlüsseldienst", "abschleppdienst", "adac", "mitarbeiter", "andere"],
-        additional_info="Die Kategorie adac darf nur gewählt werden wenn im text explizit ADAC genannt wird oder eine abkürzung die ähnlich klingt! Die Eingab",
+        additional_info="Die Kategorie adac darf nur gewählt werden wenn im text explizit ADAC genannt wird oder eine abkürzung die ähnlich klingt! Die Eingabe kann falsch geschrieben werden. Korriere Rechtschreibfehler automatisch.",
         examples={
             "adac": [
                 "Hallo, hier ist Susanne vom ADAC. Wir haben einen Kunden mit einem problem bezüglich seines Autos.",
@@ -155,34 +159,24 @@ def extract_location(spoken_text: str) -> tuple[dict, float]:
         user_prompt = f"""Extrahiere den Ort aus dieser Anfrage: {spoken_text}. 
         Gebe ein json zurück, ohne ```json und ```. 
         Das json sollte die folgenden keys haben: 'plz', 'ort', 'strasse', 'hausnummer'.
+        Es ist Möglich dass PLZ and Ort nicht zusammenpassen, da der Kunde sich vertippt haben könnte.
+        Versuche es so zu korrigieren, dass die PLZ und der Ort zusammenpassen.
         
         Beispiele:
-        - "Johann Wilhelm Klein Straße 5 1 9 4 4 6 9 Deggendorf" -> {'plz': '94469', 'ort': 'Deggendorf', 'strasse': 'Johann Wilhelm Klein Straße', 'hausnummer': '51'}
-        - "Hauptstraße 7 9 8 2 1 3 9 Salzburg" -> {'plz': '98213', 'ort': 'Salzburg', 'strasse': 'Hauptstraße', 'hausnummer': '7'}
+        - "Johann Wilhelm Klein Straße 5 1 9 4 4 6 9 Deggendorf" -> {{'plz': '94469', 'ort': 'Deggendorf', 'strasse': 'Johann Wilhelm Klein Straße', 'hausnummer': '51'}}
+        - "Hauptstraße 7 9 8 2 1 3 9 Salzburg" -> {{'plz': '98213', 'ort': 'Salzburg', 'strasse': 'Hauptstraße', 'hausnummer': '7'}}
         """
         result = _ask_grok("", user_prompt)
         duration = time.time() - start_time
         logger.info(f"Location extraction completed in {duration:.3f}s")
         return json.loads(result), duration
     except Exception as e:
+        traceback.print_exc()
         duration = time.time() - start_time
         logger.error(f"Error extracting location after {duration:.3f}s: {e}")
         return {"plz": "", "ort": "", "strasse": "", "hausnummer": ""}, duration
 
 
 if __name__ == "__main__":
-    # Test case 1: Valid classification
-    result, _ = classify(
-        "Ich brauche einen Schlüsseldienst",
-        ["Schlüsseldienst", "Abschleppdienst"],
-        "andere",
-    )
-    print(f"Test 1 - Expected: Schlüsseldienst, Got: {result}")
-
-    # Test case 2: Yes/No question with positive response
-    result, _ = yes_no_question("Ja, das ist richtig")
-    print(f"Test 2 - Expected: True, Got: {result}")
-
-    # Test case 3: Empty input handling
-    result, _ = classify("", ["Schlüsseldienst", "Abschleppdienst"], "Andere")
-    print(f"Test 3 - Expected: Andere, Got: {result}")
+    result, time_ = extract_location("Fürstenstraße 3. 8 7 4 3 5, Cempten.")
+    print(result, time_)
