@@ -228,6 +228,27 @@
       border-bottom-left-radius: 6px;
     }
 
+    .hangup-reason {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 28px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #dc2626;
+      opacity: 0.9;
+    }
+
+    .hangup-reason .line {
+      flex: 1;
+      height: 2px;
+      background: linear-gradient(90deg, rgba(220,38,38,0), rgba(220,38,38,0.9), rgba(220,38,38,0));
+      border-radius: 2px;
+    }
+
     .empty-state {
       text-align: center;
       color: #6b7280;
@@ -517,8 +538,8 @@
       // Update audio player
       updateAudioPlayer(recording);
       
-      // Update messages
-      updateMessages(messages);
+  // Update messages
+  updateMessages(messages, info.hangup_reason);
     }
     
     function updateCallInfo(info) {
@@ -530,7 +551,7 @@
         
         for (const [key, value] of Object.entries(info)) {
           // Skip individual PLZ and Ort fields since they're combined in Standort
-          if (value != null && value !== '' && key !== 'call_number' && key !== 'PLZ' && key !== 'Ort') {
+          if (value != null && value !== '' && key !== 'call_number' && key !== 'PLZ' && key !== 'Ort' && key !== "hangup_reason") {
             const p = document.createElement('p');
             p.innerHTML = `<strong>${key}:</strong> ${formatValue(key, value)}`;
             callInfoDiv.appendChild(p);
@@ -561,7 +582,7 @@
       }
     }
     
-    function updateMessages(messages) {
+    function updateMessages(messages, hangupReason) {
       const transcriptSection = document.getElementById('transcript-section');
       const chatContainer = document.getElementById('chat-container');
       
@@ -587,6 +608,21 @@
         emptyState.className = 'empty-state';
         emptyState.textContent = 'Noch keine Nachrichten im Gespräch';
         chatContainer.appendChild(emptyState);
+      }
+      // Add hangup reason at end if available
+      if (hangupReason) {
+        const reasonContainer = document.createElement('div');
+        reasonContainer.className = 'hangup-reason';
+        const lineLeft = document.createElement('span');
+        lineLeft.className = 'line';
+        const text = document.createElement('span');
+        text.textContent = hangupReason;
+        const lineRight = document.createElement('span');
+        lineRight.className = 'line';
+        reasonContainer.appendChild(lineLeft);
+        reasonContainer.appendChild(text);
+        reasonContainer.appendChild(lineRight);
+        chatContainer.appendChild(reasonContainer);
       }
     }
     

@@ -731,6 +731,7 @@ async def send_sms_towing(request: Request):
         message = "Wir haben soeben eine SMS mit dem Link versendet. Bitte öffne den Link und teile uns deinen Standort mit. Wir rufen dich anschließend zurück."
         agent_message(await caller(request), message)
         say(response, message)
+        save_job_info(await caller(request), "hangup_reason", "Warte auf Standort per SMS")
         return send_request(request, response)
 
 
@@ -759,17 +760,23 @@ async def add_towing_contacts(request: Request):
 async def end_call(request: Request, with_message: bool = True):
     with new_response() as response:
         if with_message:
-            message = "Vielen Dank für deinen Anruf. Wir wünschen dir noch einen schönen Tag. Auf Wiederhören!"
+            message = "Vielen Dank für deinen Anruf. Wir wünschen dir noch einen schönen Tag."
             agent_message(await caller(request), message)
             say(response, message)
-        save_job_info(await caller(request), "Agent Anruf beendet", "Ja")
+        save_job_info(await caller(request), "hangup_reason", "Agent hat das Gespräch beendet")
         response.hangup()
         return send_request(request, response)
 
 
 @app.api_route("/status", methods=["GET", "POST"])
 async def status(request: Request):
+    form = await request.form()
+    logger.info("Call status: %s", dict(form))
     save_job_info(await caller(request), "Live", "Nein")
+
+    if not get_job_info(await caller(request), "hangup_reason"):
+        save_job_info(await caller(request), "hangup_reason", "Anruf durch Kunde beendet")
+
     return JSONResponse(content={"status": "ok"})
 
 
@@ -790,9 +797,10 @@ async def parse_transfer_call(request: Request, name: str):
             status = start_transfer(response, await caller(request))
 
             if status == "no_more_agents":
-                message = "Leider sind alle unsere Mitarbeiter im Gespräch. Bitte rufe später erneut an. Auf Wiederhören!"
+                message = "Leider sind alle unsere Mitarbeiter im Gespräch. Bitte rufe später erneut an."
                 agent_message(await caller(request), message)
                 say(response, message)
+                save_job_info(await caller(request), "hangup_reason", "Agent hat das Gespräch beendet")
                 response.hangup()
 
             return send_request(request, response)
@@ -811,4 +819,5 @@ async def parse_transfer_call(request: Request, name: str):
 
     with new_response() as response:
         response.hangup()
+        save_job_info(await caller(request), "hangup_reason", "Erfolgreich weitergeleitet")
         return send_request(request, response)
