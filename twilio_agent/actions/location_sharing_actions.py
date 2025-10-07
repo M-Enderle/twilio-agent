@@ -143,15 +143,9 @@ def receive_location(link_id: str, location_data: LocationData):
             json.dumps(location_record),
         )
 
-        link_data["used"] = (
-            True  # TODO: uncomment this when we have a way to track used links
-        )
-        link_data["used_at"] = (
-            datetime.now().isoformat()
-        )  # TODO: uncomment this when we have a way to track used links
-        link_data["status"] = (
-            "used"  # TODO: uncomment this when we have a way to track used links
-        )
+        link_data["used"] = True
+        link_data["used_at"] = datetime.now().isoformat()
+        link_data["status"] = "used"
 
         redis_client.setex(
             f"standort_link:{link_id}", 60 * 60 * 24, json.dumps(link_data)

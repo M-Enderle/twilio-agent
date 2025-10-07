@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import time
 from contextlib import contextmanager
 
 import dotenv
@@ -9,17 +11,12 @@ from twilio.rest import Client
 from twilio.twiml.voice_response import (Connect, Dial, Gather, Number,
                                          VoiceResponse)
 
-from twilio_agent.actions.redis_actions import (get_job_info,
+from twilio_agent.actions.redis_actions import (agent_message, get_job_info,
                                                 get_next_caller_in_queue,
                                                 get_shared_location,
-                                                agent_message,
-                                                user_message,
-                                                save_job_info)
+                                                save_job_info, user_message)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.pricing import get_price_towing_coordinates
-import time
-import asyncio
-import logging
 
 contact_manager = ContactManager()
 
@@ -33,21 +30,12 @@ twilio_phone_number = os.environ["TWILIO_PHONE_NUMBER"]
 
 client = Client(account_sid, auth_token)
 
-twilio_logger = logging.getLogger('twilio.http_client')
+twilio_logger = logging.getLogger("twilio.http_client")
 twilio_logger.setLevel(logging.WARNING)
 
-httpx_logger = logging.getLogger('httpx')
+httpx_logger = logging.getLogger("httpx")
 httpx_logger.setLevel(logging.WARNING)
 
-
-async def start_recording(call_sid: str, caller: str):
-    await asyncio.sleep(2)
-
-    recording = client.calls(call_sid).recordings.create(
-        recording_status_callback=server_url + f"/recording-status-callback/{caller.replace('+', '00')}",
-        recording_status_callback_event="completed"
-    )
-    logger.info(f"Started recording for call {call_sid}: {recording.sid}")
 
 async def caller(request: Request):
     form_data = await request.form()
@@ -101,8 +89,15 @@ def outbound_call_after_sms(to: str):
     location_data = get_shared_location(to)
     save_job_info(to, "Longitude", location_data["longitude"])
     save_job_info(to, "Latitude", location_data["latitude"])
-    save_job_info(to, "Google Maps Link", f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}")
-    user_message(to, f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}")
+    save_job_info(
+        to,
+        "Google Maps Link",
+        f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}",
+    )
+    user_message(
+        to,
+        f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}",
+    )
     if location_data:
         price, duration, provider, phone = get_price_towing_coordinates(
             location_data["longitude"], location_data["latitude"]
@@ -146,6 +141,10 @@ def outbound_call_after_sms(to: str):
             twiml=response,
             to=to,
             from_="+4915888647007",
+            record=True,
+            recording_status_callback_method="POST",
+            recording_status_callback=f"{server_url}/recording-complete/{to.replace('+', '00')}",
+            recording_status_callback_event="completed"
         )
 
 

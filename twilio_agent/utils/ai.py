@@ -93,9 +93,7 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, float]:
     start_time = time.time()
     try:
         system_prompt = "Du bist ein Ja/Nein Klassifikationssystem. Analysiere die Eingabe und bestimme, ob sie eine Zustimmung (Ja) oder Ablehnung (Nein) ausdrückt. Berücksichtige auch Varianten wie 'ja', 'richtig', 'korrekt', 'stimmt', 'genau' für Ja und 'nein', 'falsch', 'nicht richtig', 'stimmt nicht' für Nein. Antworte ausschließlich mit 'Ja' oder 'Nein'."
-        user_prompt = (
-            f"Ist diese Aussage eine Zustimmung oder Ablehnung? Text: '{spoken_text}'. Kontext der Fragestellung: '{context}'"
-        )
+        user_prompt = f"Ist diese Aussage eine Zustimmung oder Ablehnung? Text: '{spoken_text}'. Kontext der Fragestellung: '{context}'"
 
         response = _ask_grok(system_prompt, user_prompt)
         duration = time.time() - start_time

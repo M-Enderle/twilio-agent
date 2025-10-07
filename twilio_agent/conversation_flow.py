@@ -1,13 +1,15 @@
+import asyncio
 import logging
 
 import dotenv
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from twilio.twiml.voice_response import Gather
-import asyncio
 
 from twilio_agent.actions.location_sharing_actions import \
     router as location_router
+from twilio_agent.actions.recording_actions import router as recording_router
+from twilio_agent.actions.recording_actions import start_recording
 from twilio_agent.actions.redis_actions import (add_to_caller_queue,
                                                 agent_message, ai_message,
                                                 clear_caller_queue,
@@ -17,31 +19,26 @@ from twilio_agent.actions.redis_actions import (add_to_caller_queue,
                                                 init_new_call, save_job_info,
                                                 save_location, set_intent,
                                                 set_transferred_to,
-                                                twilio_message, user_message,
-                                                get_call_timestamp,
-                                                save_call_recording,
-                                                get_call_recording_binary)
+                                                twilio_message, user_message)
 from twilio_agent.actions.telegram_actions import send_telegram_notification
 from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
                                                  new_response, say,
                                                  send_job_details_sms,
                                                  send_request,
                                                  send_sms_with_link,
-                                                 start_transfer,
-                                                 start_recording)
+                                                 start_transfer)
 from twilio_agent.ui import router as ui_router
 from twilio_agent.utils.ai import (classify_intent, extract_location,
                                    yes_no_question)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.location_utils import check_location
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
-import httpx
-import os
 
 dotenv.load_dotenv()
 
 app = FastAPI()
 app.include_router(location_router)
+app.include_router(recording_router)
 app.include_router(ui_router)
 
 
@@ -102,7 +99,7 @@ async def incoming_call(request: Request):
     live_url = await send_telegram_notification(caller_number)
     logger.info(f"Telegram live UI URL: {live_url}")
 
-    asyncio.create_task(start_recording(form_data.get('CallSid'), caller_number))
+    asyncio.create_task(start_recording(form_data.get("CallSid"), caller_number))
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
     intent = get_intent(caller_number)
@@ -174,7 +171,9 @@ async def parse_intent_1(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
     classification, duration = classify_intent(speech_result)
-    ai_message(await caller(request), f"<Request classified as {classification}>", duration)
+    ai_message(
+        await caller(request), f"<Request classified as {classification}>", duration
+    )
     match classification:
         case "schlüsseldienst":
             set_intent(await caller(request), "schlüsseldienst")
@@ -229,7 +228,9 @@ async def parse_intent_2(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
     classification, duration = classify_intent(speech_result)
-    ai_message(await caller(request), f"<Request classified as {classification}>", duration)
+    ai_message(
+        await caller(request), f"<Request classified as {classification}>", duration
+    )
     match classification:
         case "schlüsseldienst":
             set_intent(await caller(request), "schlüsseldienst")
@@ -361,7 +362,9 @@ async def parse_location_locksmith(request: Request):
 async def parse_location_correct_locksmith(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
-    correct, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob die Adresse korrekt ist.")
+    correct, duration = yes_no_question(
+        speech_result, "Der Kunde wurde gefragt ob die Adresse korrekt ist."
+    )
     user_message(await caller(request), speech_result)
     with new_response() as response:
         if correct:
@@ -454,8 +457,12 @@ async def parse_connection_request_locksmith(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    connection_request, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte.")
-    ai_message(await caller(request), f"<Connection request: {connection_request}>", duration)
+    connection_request, duration = yes_no_question(
+        speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte."
+    )
+    ai_message(
+        await caller(request), f"<Connection request: {connection_request}>", duration
+    )
     if connection_request:
         save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
         with new_response() as response:
@@ -505,7 +512,9 @@ async def parse_know_plz_towing(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    plz_known, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er die Postleitzahl des Ortes kennt.")
+    plz_known, duration = yes_no_question(
+        speech_result, "Der Kunde wurde gefragt ob er die Postleitzahl des Ortes kennt."
+    )
     ai_message(await caller(request), f"<PLZ known: {plz_known}>", duration)
     if plz_known:
         save_job_info(await caller(request), "PLZ bekannt", "Ja")
@@ -647,8 +656,12 @@ async def parse_connection_request_towing(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    connection_request, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte.")
-    ai_message(await caller(request), f"<Connection request: {connection_request}>", duration)
+    connection_request, duration = yes_no_question(
+        speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte."
+    )
+    ai_message(
+        await caller(request), f"<Connection request: {connection_request}>", duration
+    )
     if connection_request:
         save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
         with new_response() as response:
@@ -692,8 +705,13 @@ async def parse_send_sms_towing(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    send_sms_request, duration = yes_no_question(speech_result, "Der Kunde wurde gefragt ob er eine SMS mit dem Link erhalten möchte.")
-    ai_message(await caller(request), f"<Send SMS request: {send_sms_request}>", duration)
+    send_sms_request, duration = yes_no_question(
+        speech_result,
+        "Der Kunde wurde gefragt ob er eine SMS mit dem Link erhalten möchte.",
+    )
+    ai_message(
+        await caller(request), f"<Send SMS request: {send_sms_request}>", duration
+    )
     if send_sms_request:
         save_job_info(await caller(request), "SMS mit Link angefordert", "Ja")
         return await send_sms_towing(request)
@@ -794,54 +812,3 @@ async def parse_transfer_call(request: Request, name: str):
     with new_response() as response:
         response.hangup()
         return send_request(request, response)
-
-
-@app.api_route("/recording-status-callback/{caller}", methods=["GET", "POST"])
-async def recording_status_callback(request: Request, caller: str):
-    form_data = await request.form()
-    original_caller = caller
-    if caller and caller.startswith("00"):
-        original_caller = "+" + caller[2:]
-
-    recording_url = form_data.get("RecordingUrl")
-    if recording_url and form_data.get("RecordingStatus") == "completed":
-        
-        media_url = recording_url.replace(".json", ".mp3")
-        logger.info("Downloading recording from %s", media_url)
-        
-        # Download the recording using Twilio credentials
-        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                media_url,
-                auth=(account_sid, auth_token)
-            )
-            
-            if response.status_code == 200:
-                recording_data = response.content
-                content_type = response.headers.get("Content-Type", "audio/mpeg")
-                save_call_recording(original_caller, recording_data, content_type)
-                logger.info(
-                    "Recording downloaded and stored for %s (%d bytes)",
-                    original_caller,
-                    len(recording_data),
-                )
-            else:
-                logger.error(
-                    "Failed to download recording for %s. Status: %s",
-                    original_caller,
-                    response.status_code,
-                )
-    
-    return JSONResponse(content={"status": "ok"})
-
-
-@app.get("/recordings/{number}/{timestamp}")
-async def fetch_recording(number: str, timestamp: str):
-    audio_bytes, content_type = get_call_recording_binary(number, timestamp)
-    if not audio_bytes:
-        raise HTTPException(status_code=404, detail="Recording not found")
-
-    return Response(content=audio_bytes, media_type=content_type)

@@ -181,7 +181,9 @@ def get_call_timestamp(call_number: str) -> str | None:
         return None
 
 
-def save_call_recording(call_number: str, recording_bytes: bytes, content_type: str = "audio/mpeg"):
+def save_call_recording(
+    call_number: str, recording_bytes: bytes, content_type: str = "audio/mpeg"
+):
     if not call_number or not recording_bytes or call_number == "anonymous":
         return
 
@@ -219,7 +221,9 @@ def get_call_recording(number: str, timestamp: str):
     try:
         return json.loads(recording_data.decode("utf-8"))
     except Exception as exc:
-        logger.error("Failed to load recording for %s at %s: %s", number, timestamp, exc)
+        logger.error(
+            "Failed to load recording for %s at %s: %s", number, timestamp, exc
+        )
         return None
 
 
@@ -236,7 +240,9 @@ def get_call_recording_binary(number: str, timestamp: str):
     try:
         audio_bytes = base64.b64decode(data_field)
     except Exception as exc:
-        logger.error("Failed to decode recording for %s at %s: %s", number, timestamp, exc)
+        logger.error(
+            "Failed to decode recording for %s at %s: %s", number, timestamp, exc
+        )
         return None, None
 
     return audio_bytes, payload.get("content_type", "audio/mpeg")

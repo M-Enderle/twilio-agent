@@ -65,8 +65,8 @@ async def websocket_details(websocket: WebSocket, number: str, timestamp: str):
                 # Check for recording
                 recording = get_call_recording(number, timestamp)
                 if recording:
-                    recording['number'] = number
-                    recording['timestamp'] = timestamp
+                    recording["number"] = number
+                    recording["timestamp"] = timestamp
 
                 # Send data to client
                 data = {
