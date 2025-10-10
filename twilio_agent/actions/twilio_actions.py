@@ -11,13 +11,15 @@ from twilio.rest import Client
 from twilio.twiml.voice_response import (Connect, Dial, Gather, Number,
                                          VoiceResponse)
 
-from twilio_agent.actions.redis_actions import (agent_message, get_job_info,
+from twilio_agent.actions.redis_actions import (agent_message, get_intent,
+                                                get_job_info,
                                                 get_next_caller_in_queue,
                                                 get_shared_location,
                                                 delete_job_info,
-                                                save_job_info, user_message)
+                                                save_job_info, google_message)
 from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.pricing import get_price_towing_coordinates
+from twilio_agent.utils.pricing import (get_price_locksmith,
+                                        get_price_towing_coordinates)
 
 contact_manager = ContactManager()
 
@@ -88,44 +90,87 @@ def send_sms_with_link(to: str):
 
 def outbound_call_after_sms(to: str):
     location_data = get_shared_location(to)
-    save_job_info(to, "Longitude", location_data["longitude"])
-    save_job_info(to, "Latitude", location_data["latitude"])
-    save_job_info(
-        to,
-        "Google Maps Link",
-        f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}",
-    )
+    if not location_data:
+        logger.error("No shared location available for %s; aborting outbound call", to)
+        return
+
+    latitude = location_data.get("latitude")
+    longitude = location_data.get("longitude")
+    if latitude is None or longitude is None:
+        logger.error("Incomplete shared location for %s: %s", to, location_data)
+        return
+
+    try:
+        latitude_float = float(latitude)
+        longitude_float = float(longitude)
+    except (TypeError, ValueError):
+        logger.error("Invalid coordinate values for %s: %s", to, location_data)
+        return
+
+    maps_link = f"https://maps.google.com/?q={latitude},{longitude}"
+    save_job_info(to, "Latitude", latitude)
+    save_job_info(to, "Longitude", longitude)
+    save_job_info(to, "Google Maps Link", maps_link)
     delete_job_info(to, "waiting_for_sms")
-    user_message(
-        to,
-        f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}",
-    )
-    if location_data:
-        price, duration, provider, phone = get_price_towing_coordinates(
-            location_data["longitude"], location_data["latitude"]
-        )
-        for key in ["price", "duration", "provider", "phone"]:
-            if not locals()[key]:
-                logger.error(f"Missing {key} for towing service")
-                return
+    delete_job_info(to, "hangup_reason")
+    google_message(to, f"Live-Standort über SMS bestätigt: {maps_link}")
+
+    intent = (get_intent(to) or "").lower()
+    if intent != "schlüsseldienst":
+        intent = "abschleppdienst"
+
+    if intent == "schlüsseldienst":
+        service_name = "Schlüsseldienst"
+        pricing_fn = get_price_locksmith
+        pricing_args = (longitude_float, latitude_float)
+    else:
+        service_name = "Abschleppdienst"
+        pricing_fn = get_price_towing_coordinates
+        pricing_args = (longitude_float, latitude_float)
+
+    try:
+        price, duration, provider, phone = pricing_fn(*pricing_args)
+    except Exception as exc:
+        logger.exception("Failed to compute %s price for %s: %s", intent, to, exc)
+        return
+
+    service_values = {
+        "price": price,
+        "duration": duration,
+        "provider": provider,
+        "phone": phone,
+    }
+    for key, german in {"price": "Preis", "duration": "Wartezeit", "provider": "Anbieter", "phone": "Telefon"}.items():
+        value = service_values[key]
+        if not value:
+            logger.error("Missing %s for %s", key, service_name)
+            return
+        save_job_info(to, german, value)
+    save_job_info(to, "Service", service_name)
+
     with new_response() as response:
         gather = Gather(
             input="speech",
             language="de-DE",
-            action=f"{server_url}/parse-connection-request-towing",
+            action=f"{server_url}/parse-connection-request-unified",
             speechTimeout="auto",
             speechModel="phone_call",
             enhanced=True,
             timeout=15,
         )
-        message = f"Hier ist die Notdienststation. Wie haben deinen Standort erhalten. Der Preis für den Abschleppdienst beträgt {price} Euro. Die Ankunftszeit beträgt ungefähr {duration} Minuten. Möchtest du den Abschleppdienst jetzt beauftragen?"
+        message = (
+            "Hier ist die Notdienststation. Wir haben deinen Standort erhalten. "
+            f"Der Preis für den {service_name} beträgt {price} Euro. "
+            f"Die Ankunftszeit beträgt ungefähr {duration} Minuten. "
+            f"Möchtest du den {service_name} jetzt beauftragen?"
+        )
         say(gather, message)
         agent_message(to, message)
         response.append(gather)
         gather2 = Gather(
             input="speech",
             language="de-DE",
-            action=f"{server_url}/parse-connection-request-towing",
+            action=f"{server_url}/parse-connection-request-unified",
             speechTimeout="auto",
             speechModel="phone_call",
             enhanced=True,
@@ -144,11 +189,13 @@ def outbound_call_after_sms(to: str):
         client.calls.create(
             twiml=response,
             to=to,
-            from_="+4915888647007",
+            from_=twilio_phone_number,
             record=True,
             recording_status_callback_method="POST",
-            recording_status_callback=f"{server_url}/recording-status-callback/{to.replace('+', '00')}",
-            recording_status_callback_event="completed"
+            recording_status_callback=f"{server_url}/recording-status-callback/{to.replace('+', '00')}?source=followup",
+            recording_status_callback_event="completed",
+            status_callback=f"{server_url}/status",
+            status_callback_event="completed",
         )
 
 

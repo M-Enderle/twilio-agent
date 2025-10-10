@@ -20,6 +20,7 @@ from twilio_agent.actions.redis_actions import (add_to_caller_queue,
                                                 save_location, set_intent,
                                                 set_transferred_to,
                                                 cleanup_call,
+                                                google_message,
                                                 twilio_message, user_message)
 from twilio_agent.actions.telegram_actions import send_telegram_notification
 from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
@@ -59,13 +60,6 @@ class WebSocketLogFilter(logging.Filter):
 
 # Get uvicorn logger
 logger = logging.getLogger("uvicorn")
-
-# Configure logger to include datetime
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 
 # Attach websocket filter to uvicorn loggers
 websocket_filter = WebSocketLogFilter()
@@ -151,7 +145,7 @@ async def greeting(request: Request):
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="default",
         )
         response.append(gather)
         
@@ -164,7 +158,7 @@ async def greeting(request: Request):
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="default",
         )
         response.append(gather2)
         await fallback_no_response(response, request)
@@ -183,10 +177,10 @@ async def parse_intent_1(request: Request):
     match classification:
         case "schlüsseldienst":
             set_intent(await caller(request), "schlüsseldienst")
-            return await address_query_locksmith(request)
+            return await address_query_unified(request)
         case "abschleppdienst":
             set_intent(await caller(request), "abschleppdienst")
-            return await know_plz_towing(request)
+            return await address_query_unified(request)
         case "adac" | "mitarbeiter":
             with new_response() as response:
                 start_transfer(response, await caller(request))
@@ -210,7 +204,7 @@ async def intent_not_understood(request: Request):
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="experimental_conversations",
         )
         response.append(gather)
         
@@ -223,7 +217,7 @@ async def intent_not_understood(request: Request):
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="experimental_conversations",
         )
         response.append(gather2)
         await fallback_no_response(response, request)
@@ -242,10 +236,10 @@ async def parse_intent_2(request: Request):
     match classification:
         case "schlüsseldienst":
             set_intent(await caller(request), "schlüsseldienst")
-            return await address_query_locksmith(request)
+            return await address_query_unified(request)
         case "abschleppdienst":
             set_intent(await caller(request), "abschleppdienst")
-            return await know_plz_towing(request)
+            return await address_query_unified(request)
         case _:
             with new_response() as response:
                 message = "Leider konnte ich dein Anliegen wieder nicht verstehen. Ich verbinde dich mit einem Mitarbeiter."
@@ -255,54 +249,75 @@ async def parse_intent_2(request: Request):
                 return send_request(request, response)
 
 
-""" Locksmith conversation flow """
+async def address_query_unified(request: Request):
+    intent = get_intent(await caller(request))
+    if intent == "abschleppdienst":
+        await add_towing_contacts(request)
+    elif intent == "schlüsseldienst":
+        await add_locksmith_contacts(request)
 
-
-async def address_query_locksmith(request: Request):
     with new_response() as response:
-        message = "Um die Kosten und Wartezeit zu berechnen, benötige ich deine Adresse. Bitte nenne mir Straße, Hausnummer, Postleitzahl und Ort."
+        message = "Kannst du mir deine Adresse nennen? Wenn nicht, drücke bitte die 1."
         say(response, message)
         agent_message(await caller(request), message)
         
         gather = Gather(
-            input="speech",
+            input="speech dtmf",
             language="de-DE",
-            action="/parse-location-locksmith",
+            action="/parse-address-query-unified",
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="experimental_conversations",
+            numDigits=1,
         )
         response.append(gather)
         
-        say(response, "Bitte nenne mir Straße, Hausnummer, Postleitzahl und Ort.")
+        say(response, "Bitte nenne deine Adresse oder drücke 1 wenn du sie nicht kennst.")
         
         gather2 = Gather(
-            input="speech",
+            input="speech dtmf",
             language="de-DE",
-            action="/parse-location-locksmith",
+            action="/parse-address-query-unified",
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="experimental_conversations",
+            numDigits=1,
         )
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
 
 
-@app.api_route("/parse-location-locksmith", methods=["GET", "POST"])
-async def parse_location_locksmith(request: Request):
+@app.api_route("/parse-address-query-unified", methods=["GET", "POST"])
+async def parse_address_query_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
-    user_message(await caller(request), speech_result)
-
+    digits = form_data.get("Digits", "")
+    user_message(await caller(request), speech_result or digits)
+    
+    # If they pressed 1 or said something that indicates they can't name address
+    if digits == "1" or not speech_result.strip():
+        save_job_info(await caller(request), "Adresse unbekannt", "Ja")
+        return await ask_send_sms_unified(request)
+    
+    # Try to parse the address they named
     location = get_geocode_result(speech_result)
     
     with new_response() as response:
         if location and (location.plz or location.ort):
-            save_location(await caller(request), location._asdict())
-            place = " ".join(filter(None, [" ".join(str(location.plz)), location.ort])).strip()
+            # Normalize location data for consistent storage
+            location_dict = location._asdict()
+            # Convert plz/ort to zipcode/place for compatibility
+            location_dict['zipcode'] = location.plz
+            location_dict['place'] = location.ort
+            save_location(await caller(request), location_dict)
+            place = " ".join(filter(None, [" ".join(str(location.plz)) if location.plz else None, location.ort])).strip() # Do not change anything here!
+            google_message(
+                await caller(request),
+                f"Google Maps Ergebnis: {location.formatted_address} ({location.google_maps_link})",
+            )
             message = f"Als Ort habe ich {place} erkannt. Ist das richtig?"
             say(response, message)
             agent_message(await caller(request), message)
@@ -310,11 +325,11 @@ async def parse_location_locksmith(request: Request):
             gather = Gather(
                 input="speech",
                 language="de-DE",
-                action="/parse-location-correct-locksmith",
+                action="/parse-location-correct-unified",
                 speechTimeout="auto",
                 timeout=15,
                 enhanced=True,
-                model="phone_call",
+                model="experimental_conversations",
             )
             response.append(gather)
             
@@ -323,412 +338,111 @@ async def parse_location_locksmith(request: Request):
             gather2 = Gather(
                 input="speech",
                 language="de-DE",
-                action="/parse-location-correct-locksmith",
+                action="/parse-location-correct-unified",
                 speechTimeout="auto",
                 timeout=15,
                 enhanced=True,
-                model="phone_call",
+                model="experimental_conversations",
             )
             response.append(gather2)
             await fallback_no_response(response, request)
             return send_request(request, response)
         else:
-            message = "Ich konnte den Ort nicht finden. Bitte gib die Postleitzahl auf dem Nummernblock ein."
+            # Address not found, ask for PLZ
+            google_message(
+                await caller(request),
+                f"Google Maps konnte die Adresse '{speech_result}' nicht eindeutig finden.",
+            )
+            return await ask_plz_unified(request)
+
+
+async def ask_plz_unified(request: Request):
+    with new_response() as response:
+        message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein. Wenn du die Postleitzahl nicht kennst, drücke bitte die 1."
+        say(response, message)
+        agent_message(await caller(request), message)
+        
+        gather = Gather(
+            input="dtmf",
+            action="/parse-plz-unified",
+            timeout=10,
+            numDigits=5,
+            enhanced=True,
+            model="experimental_conversations",
+        )
+        response.append(gather)
+        
+        say(response, "Bitte gib die Postleitzahl ein oder drücke 1 wenn du sie nicht kennst.")
+        
+        gather2 = Gather(
+            input="dtmf",
+            action="/parse-plz-unified",
+            numDigits=5,
+            timeout=10,
+            enhanced=True,
+            model="experimental_conversations",
+        )
+        response.append(gather2)
+        await fallback_no_response(response, request)
+        return send_request(request, response)
+
+
+@app.api_route("/parse-plz-unified", methods=["GET", "POST"])
+async def parse_plz_unified(request: Request):
+    form_data = await request.form()
+    digits = form_data.get("Digits", "")
+    user_message(await caller(request), digits)
+    
+    # Check if user pressed 1 (doesn't know PLZ)
+    if digits == "1":
+        save_job_info(await caller(request), "PLZ unbekannt", "Ja")
+        return await ask_send_sms_unified(request)
+    
+    # Otherwise treat as PLZ
+    plz = digits
+    save_job_info(await caller(request), "PLZ Tastatur", plz)
+    location = check_location(plz, None)
+
+    with new_response() as response:
+        if location:
+            save_location(await caller(request), location)
+            link = None
+            if location.get("latitude") is not None and location.get("longitude") is not None:
+                link = f"https://maps.google.com/?q={location['latitude']},{location['longitude']}"
+            summary = f"Standort über PLZ gefunden: {location.get('place', 'Unbekannt')} {location.get('zipcode', '')}".strip()
+            if link:
+                summary = f"{summary} ({link})"
+            google_message(await caller(request), summary)
+            return await calculate_cost_unified(request)
+        else:
+            google_message(
+                await caller(request),
+                f"Keine Standortdaten für eingegebene PLZ {plz} gefunden.",
+            )
+            message = "Leider konnte ich den Ort nicht finden."
             say(response, message)
             agent_message(await caller(request), message)
-            
-            gather = Gather(
-                input="dtmf",
-                action="/parse-location-numberblock-locksmith",
-                timeout=10,
-                numDigits=5,
-                enhanced=True,
-                model="phone_call",
-            )
-            response.append(gather)
-            
-            say(response, "Bitte gib die Postleitzahl erneut ein.")
-            
-            gather2 = Gather(
-                input="dtmf",
-                action="/parse-location-numberblock-locksmith",
-                timeout=10,
-                numDigits=5,
-                enhanced=True,
-                model="phone_call",
-            )
-            response.append(gather2)
-            await fallback_no_response(response, request)
-            return send_request(request, response)
+            return await ask_send_sms_unified(request)
 
 
-@app.api_route("/parse-location-correct-locksmith", methods=["GET", "POST"])
-async def parse_location_correct_locksmith(request: Request):
+@app.api_route("/parse-location-correct-unified", methods=["GET", "POST"])
+async def parse_location_correct_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     correct, duration = yes_no_question(
         speech_result, "Der Kunde wurde gefragt ob die Adresse korrekt ist."
     )
-    ai_message(await caller(request), f"<Location correct: {correct}>", duration)
+    google_message(await caller(request), f"Adresse bestätigt: {correct}", duration)
     user_message(await caller(request), speech_result)
     with new_response() as response:
         if correct:
-            return await calculate_cost_locksmith(request)
+            return await calculate_cost_unified(request)
         else:
-            message = "Bitte gib die Postleitzahl auf dem Nummernblock ein oder drücke die einz falls du deine Postleitzahl nicht kennst."
-            say(response, message)
-            agent_message(await caller(request), message)
-            
-            gather = Gather(
-                input="dtmf",
-                action="/parse-location-numberblock-locksmith",
-                numDigits=5,
-                timeout=10,
-                enhanced=True,
-                model="phone_call",
-            )
-            response.append(gather)
-            
-            say(response, "Bitte gib die Postleitzahl erneut ein.")
-            
-            gather2 = Gather(
-                input="dtmf",
-                action="/parse-location-numberblock-locksmith",
-                numDigits=5,
-                timeout=10,
-                enhanced=True,
-                model="phone_call",
-            )
-            response.append(gather2)
-            await fallback_no_response(response, request)
-            return send_request(request, response)
+            # Address not correct, ask for PLZ
+            return await ask_plz_unified(request)
 
 
-@app.api_route("/parse-location-numberblock-locksmith", methods=["GET", "POST"])
-async def parse_location_numberblock_locksmith(request: Request):
-    form_data = await request.form()
-    plz = form_data.get("Digits", "")
-    save_job_info(await caller(request), "PLZ Tastatur", plz)
-    user_message(await caller(request), plz)
-    if len(str(plz)) > 3:
-        location_result = check_location(plz, None)
-        if location_result:
-            save_location(await caller(request), location_result)
-            return await calculate_cost_locksmith(request)
-    message = "Ich leite dich an den Fahrer weiter."
-    agent_message(await caller(request), message)
-    with new_response() as response:
-        say(response, message)
-        start_transfer(response, await caller(request))
-        return send_request(request, response)
-
-
-async def calculate_cost_locksmith(request: Request):
-    location = get_location(await caller(request))
-    try:
-        longitude = float(location["longitude"])
-        latitude = float(location["latitude"])
-    except (KeyError, TypeError, ValueError) as exc:
-        ai_message(
-            await caller(request),
-            f"<Locksmith pricing failed: missing coordinates ({exc})>",
-        )
-        with new_response() as response:
-            message = "Ich verbinde dich mit einem Mitarbeiter."
-            say(response, message)
-            agent_message(await caller(request), message)
-            start_transfer(response, await caller(request))
-            return send_request(request, response)
-
-    price, duration, provider, phone = get_price_locksmith(longitude, latitude)
-    german_keys = {
-        "price": "Preis",
-        "duration": "Wartezeit",
-        "provider": "Anbieter",
-        "phone": "Telefon",
-    }
-    for key in ["price", "duration", "provider", "phone"]:
-        save_job_info(await caller(request), german_keys[key], locals()[key])
-
-    await add_locksmith_contacts(request)
-
-    with new_response() as response:
-        message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
-        say(response, message)
-        agent_message(await caller(request), message)
-        
-        gather = Gather(
-            input="speech",
-            language="de-DE",
-            action="/parse-connection-request-locksmith",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather)
-        
-        say(response, "Bitte sage ja oder nein.")
-        
-        gather2 = Gather(
-            input="speech",
-            language="de-DE",
-            action="/parse-connection-request-locksmith",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather2)
-        await fallback_no_response(response, request)
-        return send_request(request, response)
-
-
-@app.api_route("/parse-connection-request-locksmith", methods=["GET", "POST"])
-async def parse_connection_request_locksmith(request: Request):
-    form_data = await request.form()
-    speech_result = form_data.get("SpeechResult", "")
-    user_message(await caller(request), speech_result)
-    connection_request, duration = yes_no_question(
-        speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte."
-    )
-    ai_message(
-        await caller(request), f"<Connection request: {connection_request}>", duration
-    )
-    if connection_request:
-        save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
-        with new_response() as response:
-            start_transfer(response, await caller(request))
-            return send_request(request, response)
-    else:
-        save_job_info(await caller(request), "Weiterleitung angefordert", "Nein")
-        return await end_call(request)
-
-
-""" Towing conversation flow """
-
-
-async def know_plz_towing(request: Request):
-
-    await add_towing_contacts(request)
-
-    with new_response() as response:
-        message = "Kennst du die Postleitzahl von dem Ort an dem du gerade bist?"
-        say(response, message)
-        agent_message(await caller(request), message)
-        
-        gather = Gather(
-            input="speech",
-            language="de-DE",
-            action="/parse-know-plz-towing",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather)
-        
-        say(response, "Bitte sage ja oder nein.")
-        
-        gather2 = Gather(
-            input="speech",
-            language="de-DE",
-            action="/parse-know-plz-towing",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather2)
-        await fallback_no_response(response, request)
-        return send_request(request, response)
-
-
-@app.api_route("/parse-know-plz-towing", methods=["GET", "POST"])
-async def parse_know_plz_towing(request: Request):
-    form_data = await request.form()
-    speech_result = form_data.get("SpeechResult", "")
-    user_message(await caller(request), speech_result)
-    plz_known, duration = yes_no_question(
-        speech_result, "Der Kunde wurde gefragt ob er die Postleitzahl des Ortes kennt."
-    )
-    ai_message(await caller(request), f"<PLZ known: {plz_known}>", duration)
-    if plz_known:
-        save_job_info(await caller(request), "PLZ bekannt", "Ja")
-        return await ask_plz_towing(request)
-    else:
-        save_job_info(await caller(request), "PLZ bekannt", "Nein")
-        return await ask_send_sms_towing(request)
-
-
-async def ask_plz_towing(request: Request):
-    with new_response() as response:
-        message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein."
-        say(response, message)
-        agent_message(await caller(request), message)
-        
-        gather = Gather(
-            input="dtmf",
-            action="/parse-plz-towing",
-            timeout=10,
-            numDigits=5,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather)
-        
-        say(response, "Bitte gib die Postleitzahl erneut ein.")
-        
-        gather2 = Gather(
-            input="dtmf",
-            action="/parse-plz-towing",
-            numDigits=5,
-            timeout=10,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather2)
-        await fallback_no_response(response, request)
-        return send_request(request, response)
-
-
-@app.api_route("/parse-plz-towing", methods=["GET", "POST"])
-async def parse_plz_towing(request: Request):
-    form_data = await request.form()
-    plz = form_data.get("Digits", "")
-    save_job_info(await caller(request), "PLZ Tastatur", plz)
-
-    user_message(await caller(request), plz)
-    location = check_location(plz, None)
-
-    with new_response() as response:
-        if location:
-            save_location(await caller(request), location)
-            ai_message(
-                await caller(request),
-                f"<Location found: {location['place']}, {location['zipcode']}>",
-            )
-            return await calculate_cost_towing(request)
-        else:
-            ai_message(await caller(request), f"<Location not found for PLZ: {plz}>")
-            message = "Leider konnte ich den Ort nicht finden. Bitte gib die Postleitzahl erneut ein."
-            say(response, message)
-            agent_message(await caller(request), message)
-            
-            gather = Gather(
-                input="dtmf",
-                action="/parse-plz-towing-retry",
-                numDigits=5,
-                timeout=10,
-                enhanced=True,
-                model="phone_call",
-            )
-            response.append(gather)
-            
-            say(response, "Bitte gib die Postleitzahl erneut ein.")
-            
-            gather2 = Gather(
-                input="dtmf",
-                action="/parse-plz-towing-retry",
-                numDigits=5,
-                timeout=10,
-                enhanced=True,
-                model="phone_call",
-            )
-            response.append(gather2)
-            await fallback_no_response(response, request)
-            return send_request(request, response)
-
-
-@app.api_route("/parse-plz-towing-retry", methods=["GET", "POST"])
-async def parse_plz_towing_retry(request: Request):
-    form_data = await request.form()
-    plz = form_data.get("Digits", "")
-    user_message(await caller(request), plz)
-    save_job_info(await caller(request), "PLZ Tastatur Wiederholung", plz)
-    location = check_location(plz, None)
-
-    with new_response() as response:
-        if location:
-            save_location(await caller(request), location)
-            ai_message(
-                await caller(request),
-                f"<Location found: {location['place']}, {location['zipcode']}>",
-            )
-            return await calculate_cost_towing(request)
-        else:
-            message = "Ich leite dich an den Fahrer weiter."
-            agent_message(await caller(request), message)
-            say(response, message)
-            return send_request(request, response)
-
-
-async def calculate_cost_towing(request: Request):
-    location = get_location(await caller(request))
-    price, duration, provider, phone = get_price_towing(location)
-    german_keys = {
-        "price": "Preis",
-        "duration": "Wartezeit",
-        "provider": "Anbieter",
-        "phone": "Telefon",
-    }
-    for key in ["price", "duration", "provider", "phone"]:
-        save_job_info(await caller(request), german_keys[key], locals()[key])
-
-    with new_response() as response:
-        message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
-        say(response, message)
-        agent_message(await caller(request), message)
-        
-        gather = Gather(
-            input="speech",
-            language="de-DE",
-            action="/parse-connection-request-towing",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather)
-        
-        say(response, "Bitte sage ja oder nein.")
-        
-        gather2 = Gather(
-            input="speech",
-            language="de-DE",
-            action="/parse-connection-request-towing",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="phone_call",
-        )
-        response.append(gather2)
-        await fallback_no_response(response, request)
-        return send_request(request, response)
-
-
-@app.api_route("/parse-connection-request-towing", methods=["GET", "POST"])
-async def parse_connection_request_towing(request: Request):
-    form_data = await request.form()
-    speech_result = form_data.get("SpeechResult", "")
-    user_message(await caller(request), speech_result)
-    connection_request, duration = yes_no_question(
-        speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte."
-    )
-    ai_message(
-        await caller(request), f"<Connection request: {connection_request}>", duration
-    )
-    if connection_request:
-        save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
-        with new_response() as response:
-            start_transfer(response, await caller(request))
-            return send_request(request, response)
-    else:
-        save_job_info(await caller(request), "Weiterleitung angefordert", "Nein")
-        return await end_call(request)
-
-
-async def ask_send_sms_towing(request: Request):
+async def ask_send_sms_unified(request: Request):
     with new_response() as response:
         message = "Wir können dir eine SMS mit einem Link zusenden, der uns deinen Standort übermittelt. Bist du damit einverstanden?"
         say(response, message)
@@ -737,11 +451,11 @@ async def ask_send_sms_towing(request: Request):
         gather = Gather(
             input="speech",
             language="de-DE",
-            action="/parse-send-sms-towing",
+            action="/parse-send-sms-unified",
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="experimental_conversations",
         )
         response.append(gather)
         
@@ -750,19 +464,19 @@ async def ask_send_sms_towing(request: Request):
         gather2 = Gather(
             input="speech",
             language="de-DE",
-            action="/parse-send-sms-towing",
+            action="/parse-send-sms-unified",
             speechTimeout="auto",
             timeout=15,
             enhanced=True,
-            model="phone_call",
+            model="experimental_conversations",
         )
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
 
 
-@app.api_route("/parse-send-sms-towing", methods=["GET", "POST"])
-async def parse_send_sms_towing(request: Request):
+@app.api_route("/parse-send-sms-unified", methods=["GET", "POST"])
+async def parse_send_sms_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
@@ -775,7 +489,7 @@ async def parse_send_sms_towing(request: Request):
     )
     if send_sms_request:
         save_job_info(await caller(request), "SMS mit Link angefordert", "Ja")
-        return await send_sms_towing(request)
+        return await send_sms_unified(request)
     else:
         save_job_info(await caller(request), "SMS mit Link angefordert", "Nein")
         message = "Kein Problem. Ich leite dich an den Fahrer weiter."
@@ -786,15 +500,105 @@ async def parse_send_sms_towing(request: Request):
             return send_request(request, response)
 
 
-async def send_sms_towing(request: Request):
+async def send_sms_unified(request: Request):
     send_sms_with_link(await caller(request))
+    save_job_info(await caller(request), "hangup_reason", "Warte auf Standort per SMS")
+    save_job_info(await caller(request), "waiting_for_sms", "Ja")
+    print("SMS with link sent, waiting for location...")
     with new_response() as response:
         message = "Wir haben soeben eine SMS mit dem Link versendet. Bitte öffne den Link und teile uns deinen Standort mit. Wir rufen dich anschließend zurück."
         agent_message(await caller(request), message)
         say(response, message)
-        save_job_info(await caller(request), "hangup_reason", "Warte auf Standort per SMS")
-        save_job_info(await caller(request), "waiting_for_sms", "Ja")
         return send_request(request, response)
+
+
+async def calculate_cost_unified(request: Request):
+    intent = get_intent(await caller(request))
+    location = get_location(await caller(request))
+    
+    if intent == "schlüsseldienst":
+        try:
+            longitude = float(location["longitude"])
+            latitude = float(location["latitude"])
+        except (KeyError, TypeError, ValueError) as exc:
+            ai_message(
+                await caller(request),
+                f"<Locksmith pricing failed: missing coordinates ({exc})>",
+            )
+            with new_response() as response:
+                message = "Ich verbinde dich mit einem Mitarbeiter."
+                say(response, message)
+                agent_message(await caller(request), message)
+                start_transfer(response, await caller(request))
+                return send_request(request, response)
+
+        price, duration, provider, phone = get_price_locksmith(longitude, latitude)
+        save_job_info(await caller(request), "Anbieter", provider)
+        await add_locksmith_contacts(request)
+
+    else:  # abschleppdienst
+        price, duration, provider, phone = get_price_towing(location)
+    
+    german_keys = {
+        "price": "Preis",
+        "duration": "Wartezeit",
+        "provider": "Anbieter",
+        "phone": "Telefon",
+    }
+    for key in ["price", "duration", "provider", "phone"]:
+        save_job_info(await caller(request), german_keys[key], locals()[key])
+
+    with new_response() as response:
+        message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
+        say(response, message)
+        agent_message(await caller(request), message)
+        
+        gather = Gather(
+            input="speech",
+            language="de-DE",
+            action="/parse-connection-request-unified",
+            speechTimeout="auto",
+            timeout=15,
+            enhanced=True,
+            model="experimental_conversations",
+        )
+        response.append(gather)
+        
+        say(response, "Bitte sage ja oder nein.")
+        
+        gather2 = Gather(
+            input="speech",
+            language="de-DE",
+            action="/parse-connection-request-unified",
+            speechTimeout="auto",
+            timeout=15,
+            enhanced=True,
+            model="experimental_conversations",
+        )
+        response.append(gather2)
+        await fallback_no_response(response, request)
+        return send_request(request, response)
+
+
+@app.api_route("/parse-connection-request-unified", methods=["GET", "POST"])
+async def parse_connection_request_unified(request: Request):
+    form_data = await request.form()
+    speech_result = form_data.get("SpeechResult", "")
+    user_message(await caller(request), speech_result)
+    connection_request, duration = yes_no_question(
+        speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte."
+    )
+    ai_message(
+        await caller(request), f"<Connection request: {connection_request}>", duration
+    )
+    if connection_request:
+        save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
+        with new_response() as response:
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
+    else:
+        save_job_info(await caller(request), "Weiterleitung angefordert", "Nein")
+        return await end_call(request)
 
 
 """ Call Handling """
@@ -834,13 +638,12 @@ async def end_call(request: Request, with_message: bool = True):
 async def status(request: Request):
     form = await request.form()
     logger.info("Call status: %s", dict(form))
-    save_job_info(await caller(request), "Live", "Nein")
 
-    if not get_job_info(await caller(request), "hangup_reason"):
-        save_job_info(await caller(request), "hangup_reason", "Anruf durch Kunde beendet")
+    if form.get("CallStatus") == "completed":
+        save_job_info(await caller(request), "Live", "Nein")
 
-    if not get_job_info(await caller(request), "waiting_for_sms"):
-        cleanup_call(await caller(request))
+        if not get_job_info(await caller(request), "hangup_reason"):
+            save_job_info(await caller(request), "hangup_reason", "Anruf durch Kunde beendet")
 
     return JSONResponse(content={"status": "ok"})
 

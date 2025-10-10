@@ -33,7 +33,7 @@ async def send_message(tracking_url: str, phone: str):
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
     # Replace with your chat ID
-    CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") if not "17657888" in caller_number else "6919860852"
+    CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") if not "17657888" in phone else "6919860852"
 
     bot = Bot(token=BOT_TOKEN)
 

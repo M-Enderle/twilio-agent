@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from redis import Redis
 
-from twilio_agent.actions.redis_actions import get_call_recording
+from twilio_agent.actions.redis_actions import get_available_recordings
 
 router = APIRouter()
 
@@ -56,23 +56,43 @@ async def websocket_details(websocket: WebSocket, number: str, timestamp: str):
                 else:
                     info = info_raw
 
-                messages = (
+                messages_raw = (
                     yaml.safe_load(redis_messages.decode("utf-8"))
                     if redis_messages
                     else []
                 )
+                messages = []
+                for entry in messages_raw or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    raw_role = str(entry.get("role", "assistant"))
+                    role_class = raw_role.lower().replace(" ", "-")
+                    content = entry.get("content", "")
+                    messages.append(
+                        {
+                            "role": raw_role,
+                            "role_class": role_class,
+                            "content": content,
+                        }
+                    )
 
-                # Check for recording
-                recording = get_call_recording(number, timestamp)
-                if recording:
-                    recording["number"] = number
-                    recording["timestamp"] = timestamp
+                # Check for recordings (initial + follow-up)
+                recordings_raw = get_available_recordings(number, timestamp) or {}
+                recordings: dict[str, dict] = {}
+                for rec_type, payload in recordings_raw.items():
+                    if not isinstance(payload, dict):
+                        continue
+                    enriched = dict(payload)
+                    enriched["number"] = number
+                    enriched["timestamp"] = timestamp
+                    enriched.setdefault("recording_type", rec_type)
+                    recordings[rec_type] = enriched
 
                 # Send data to client
                 data = {
                     "info": info,
                     "messages": messages,
-                    "recording": recording,
+                    "recordings": recordings,
                     "timestamp": datetime.now().isoformat(),
                 }
                 await websocket.send_json(data)

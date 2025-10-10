@@ -7,6 +7,9 @@ import zoneinfo
 
 import yaml
 from redis import Redis
+import dotenv
+
+dotenv.load_dotenv()
 
 logger = logging.getLogger("uvicorn")
 
@@ -15,6 +18,24 @@ redis = Redis.from_url(REDIS_URL)
 tz = zoneinfo.ZoneInfo("Europe/Berlin")
 
 persistance_time = 60 * 60  # 1 hour
+
+DEFAULT_RECORDING_TYPE = "initial"
+RECORDING_TYPE_ORDER = (DEFAULT_RECORDING_TYPE, "followup")
+VALID_RECORDING_TYPES = set(RECORDING_TYPE_ORDER)
+
+
+def _normalize_recording_type(recording_type: str | None) -> str:
+    if not recording_type:
+        return DEFAULT_RECORDING_TYPE
+    candidate = str(recording_type).strip().lower()
+    if candidate in VALID_RECORDING_TYPES:
+        return candidate
+    logger.warning("Unknown recording_type '%s'; falling back to '%s'", recording_type, DEFAULT_RECORDING_TYPE)
+    return DEFAULT_RECORDING_TYPE
+
+
+def _recording_key(number_without_plus: str, timestamp: str, recording_type: str) -> str:
+    return f"verlauf:{number_without_plus}:{timestamp}:recording:{recording_type}"
 
 
 def _set_hist_info(call_number: str, key: str, value: str) -> str:
@@ -85,6 +106,15 @@ def ai_message(call_number: str, message: str, duration: float = None):
         message_with_timing = message
     _save_message(call_number, message_with_timing, "AI")
     logger.info("AI: %s", message_with_timing)
+
+
+def google_message(call_number: str, message: str, duration: float | None = None):
+    if duration is not None:
+        message_with_timing = f"{message} (took {duration:.3f}s)"
+    else:
+        message_with_timing = message
+    _save_message(call_number, message_with_timing, "google")
+    logger.info("Google: %s", message_with_timing)
 
 
 def twilio_message(call_number: str, message: str):
@@ -200,6 +230,7 @@ def save_call_recording(
     recording_bytes: bytes,
     content_type: str = "audio/mpeg",
     metadata: dict | None = None,
+    recording_type: str | None = None,
 ):
     if not call_number or not recording_bytes or call_number == "anonymous":
         return
@@ -209,10 +240,21 @@ def save_call_recording(
         return
 
     key_suffix = start_time.decode("utf-8")
-    logger.info(f"Saving recording for {call_number} with key verlauf:{call_number.replace('+', '00')}:{key_suffix}:recording, size: {len(recording_bytes)} bytes")
+    normalized_type = _normalize_recording_type(recording_type)
+    number_without_plus = call_number.replace("+", "00")
+    redis_key = _recording_key(number_without_plus, key_suffix, normalized_type)
+
+    logger.info(
+        "Saving %s recording for %s with key %s (bytes=%d)",
+        normalized_type,
+        call_number,
+        redis_key,
+        len(recording_bytes),
+    )
     payload_obj = {
         "content_type": content_type,
         "data": base64.b64encode(recording_bytes).decode("ascii"),
+        "recording_type": normalized_type,
     }
     if metadata:
         payload_obj["metadata"] = metadata
@@ -227,21 +269,23 @@ def save_call_recording(
 
     recording_payload = json.dumps(payload_obj)
 
-    redis.set(
-        f"verlauf:{call_number.replace('+', '00')}:{key_suffix}:recording",
-        recording_payload,
-    )
+    redis.set(redis_key, recording_payload)
 
-    save_job_info(call_number, "Audioaufnahme", "Verfügbar")
+    if normalized_type == DEFAULT_RECORDING_TYPE:
+        save_job_info(call_number, "Audioaufnahme", "Verfügbar")
+        save_job_info(call_number, "Audioaufnahme (Erstanruf)", "Verfügbar")
+    else:
+        save_job_info(call_number, "Audioaufnahme (SMS Rückruf)", "Verfügbar")
 
 
-def get_call_recording(number: str, timestamp: str):
+def get_call_recording(number: str, timestamp: str, recording_type: str | None = None):
     if not number or not timestamp:
         return None
 
+    normalized_type = _normalize_recording_type(recording_type)
     number = number.replace('+', '00')
 
-    redis_key = f"verlauf:{number}:{timestamp}:recording"
+    redis_key = _recording_key(number, timestamp, normalized_type)
     recording_data = redis.get(redis_key)
 
     if not recording_data:
@@ -249,6 +293,7 @@ def get_call_recording(number: str, timestamp: str):
 
     try:
         payload = json.loads(recording_data.decode("utf-8"))
+        payload.setdefault("recording_type", normalized_type)
         return payload
     except Exception as exc:
         logger.error(
@@ -257,9 +302,9 @@ def get_call_recording(number: str, timestamp: str):
         return None
 
 
-def get_call_recording_binary(number: str, timestamp: str):
+def get_call_recording_binary(number: str, timestamp: str, recording_type: str | None = None):
     """Return decoded audio bytes and content type for a stored recording."""
-    payload = get_call_recording(number, timestamp)
+    payload = get_call_recording(number, timestamp, recording_type)
     if not payload:
         return None, None
 
@@ -278,6 +323,15 @@ def get_call_recording_binary(number: str, timestamp: str):
     return audio_bytes, payload.get("content_type", "audio/mpeg")
 
 
+def get_available_recordings(number: str, timestamp: str) -> dict[str, dict]:
+    recordings: dict[str, dict] = {}
+    for recording_type in RECORDING_TYPE_ORDER:
+        payload = get_call_recording(number, timestamp, recording_type)
+        if payload:
+            recordings[recording_type] = payload
+    return recordings
+
+
 def cleanup_call(call_number: str):
     if call_number == "anonymous":
         return
@@ -289,6 +343,8 @@ def cleanup_call(call_number: str):
         f"anrufe:{call_number}:gestartet_um",
         f"anrufe:{call_number}:warteschlange",
     ]
+
+    logger.warning(f"Cleaning up call data for {call_number}: {keys_to_delete}")
 
     for key in keys_to_delete:
         redis.delete(key)

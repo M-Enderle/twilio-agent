@@ -159,6 +159,43 @@
       text-decoration: underline;
     }
 
+    .audio-section {
+      margin-top: 20px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .audio-card {
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+      background: linear-gradient(135deg, #f9fafc 0%, #eef2ff 100%);
+      border: 1px solid #e0e7ff;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.1);
+    }
+
+    .audio-card.active {
+      display: flex;
+    }
+
+    .audio-card h3 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: #312e81;
+    }
+
+    .audio-meta {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .audio-card audio {
+      width: 100%;
+    }
+
     .transcript-section h2 {
       font-size: 16px;
       font-weight: 700;
@@ -176,6 +213,16 @@
       margin-bottom: 18px;
       display: flex;
       flex-direction: column;
+    }
+
+    .message[data-role]::before {
+      content: attr(data-role);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      color: #94a3b8;
     }
 
     .message-bubble {
@@ -199,7 +246,8 @@
 
     .message.assistant,
     .message.grok,
-    .message.AI {
+    .message.ai,
+    .message.google {
       align-items: flex-start;
     }
 
@@ -210,10 +258,17 @@
     }
 
     .message.grok .message-bubble,
-    .message.AI .message-bubble {
+    .message.ai .message-bubble {
       background: #ede9fe;
       color: #2d2d2d;
       border-left: 4px solid #a855f7;
+      border-bottom-left-radius: 6px;
+    }
+
+    .message.google .message-bubble {
+      background: #e0f2fe;
+      color: #0f172a;
+      border-left: 4px solid #0284c7;
       border-bottom-left-radius: 6px;
     }
 
@@ -327,6 +382,10 @@
         max-width: 85%;
       }
 
+      .audio-section {
+        grid-template-columns: 1fr;
+      }
+
       .back-btn {
         font-size: 20px;
         left: 16px;
@@ -375,8 +434,9 @@
         <!-- Call info will be populated by JavaScript -->
       </div>
       
-      <div id="audio-player" style="display: none; margin-top: 10px;">
-        <!-- Audio player will be populated by JavaScript -->
+      <div id="audio-section" class="audio-section" style="display: none;">
+        <div id="audio-initial" class="audio-card" data-recording-type="initial"></div>
+        <div id="audio-followup" class="audio-card" data-recording-type="followup"></div>
       </div>
       
       <div id="transcript-section" class="transcript-section" style="display: none;">
@@ -509,7 +569,7 @@
     }
 
     function updateUI(data) {
-      const { info, messages, recording } = data;
+      const { info, messages, recordings } = data;
       
       // Hide loading state
       document.getElementById('loading-state').style.display = 'none';
@@ -535,8 +595,8 @@
       // Update call info
       updateCallInfo(info);
       
-      // Update audio player
-      updateAudioPlayer(recording);
+  // Update audio players
+  updateAudioPlayers(recordings);
       
   // Update messages
   updateMessages(messages, info.hangup_reason);
@@ -560,26 +620,78 @@
       }
     }
     
-    function updateAudioPlayer(recording) {
-      const audioPlayerDiv = document.getElementById('audio-player');
-      
-      if (recording && audioPlayerDiv.children.length === 0) {
-        audioPlayerDiv.style.display = 'block';
-        
-        const audio = document.createElement('audio');
-        audio.controls = true;
-        audio.preload = 'metadata';
-        audio.style.width = '100%';
-        
-        const source = document.createElement('source');
-        source.src = `/recordings/${recording.number}/${recording.timestamp}`;
-        source.type = recording.content_type || 'audio/mpeg';
-        
-        audio.appendChild(source);
-        audioPlayerDiv.appendChild(audio);
-      } else if (!recording) {
-        audioPlayerDiv.style.display = 'none';
+    function updateAudioPlayers(recordings) {
+      const section = document.getElementById('audio-section');
+      if (!section) {
+        return;
       }
+      const initialCard = document.getElementById('audio-initial');
+      const followupCard = document.getElementById('audio-followup');
+
+      const initialData = recordings && recordings.initial;
+      const followupData = recordings && recordings.followup;
+
+      renderAudioCard(initialCard, initialData, 'Audio vom Erstanruf', (initialData ? `/recordings/${initialData.number}/${initialData.timestamp}` : null));
+      renderAudioCard(followupCard, followupData, 'Audio nach SMS-Link', (followupData ? `/recordings/link/${followupData.number}/${followupData.timestamp}` : null));
+
+      const hasAny = Boolean(initialData || followupData);
+  section.style.display = hasAny ? 'block' : 'none';
+    }
+
+    function renderAudioCard(cardEl, data, title, url) {
+      if (!cardEl) {
+        return;
+      }
+
+      if (!data || !url) {
+        cardEl.classList.remove('active');
+        cardEl.removeAttribute('data-current-signature');
+        cardEl.innerHTML = '';
+        return;
+      }
+
+      const metadata = data.metadata || {};
+      const duration = metadata.segment_duration_seconds ?? metadata.duration_total_seconds;
+      const durationValue = typeof duration === 'number' ? Math.round(duration) : null;
+      const sid = metadata.recording_sid || `${data.recording_type || ''}-${data.timestamp || ''}`;
+      const bytes = metadata.bytes_total ?? (typeof data.data === 'string' ? data.data.length : null);
+      const signature = `${sid}:${data.content_type || 'audio/mpeg'}:${bytes ?? 'n/a'}`;
+
+      const currentSignature = cardEl.getAttribute('data-current-signature');
+      if (cardEl.classList.contains('active') && currentSignature === signature) {
+        return;
+      }
+
+      cardEl.innerHTML = '';
+      cardEl.classList.add('active');
+      cardEl.setAttribute('data-current-signature', signature);
+
+      const heading = document.createElement('h3');
+      heading.textContent = title;
+      cardEl.appendChild(heading);
+
+      const metaParts = [];
+      if (durationValue !== null && !Number.isNaN(durationValue)) {
+        metaParts.push(`Dauer ca. ${durationValue}s`);
+      }
+      if (metadata.recording_sid) {
+        metaParts.push(`SID: ${metadata.recording_sid}`);
+      }
+      if (metaParts.length > 0) {
+        const metaElem = document.createElement('div');
+        metaElem.className = 'audio-meta';
+        metaElem.textContent = metaParts.join(' • ');
+        cardEl.appendChild(metaElem);
+      }
+
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.preload = 'metadata';
+      const source = document.createElement('source');
+      source.src = url;
+      source.type = data.content_type || 'audio/mpeg';
+      audio.appendChild(source);
+      cardEl.appendChild(audio);
     }
     
     function updateMessages(messages, hangupReason) {
@@ -593,7 +705,11 @@
         
         messages.forEach(message => {
           const messageDiv = document.createElement('div');
-          messageDiv.className = `message ${message.role}`;
+          const roleClass = message.role_class || (message.role ? message.role.toLowerCase() : 'assistant');
+          messageDiv.className = `message ${roleClass}`;
+          if (message.role) {
+            messageDiv.setAttribute('data-role', message.role);
+          }
           
           const bubble = document.createElement('div');
           bubble.className = 'message-bubble';
