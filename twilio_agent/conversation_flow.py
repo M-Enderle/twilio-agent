@@ -19,6 +19,7 @@ from twilio_agent.actions.redis_actions import (add_to_caller_queue,
                                                 init_new_call, save_job_info,
                                                 save_location, set_intent,
                                                 set_transferred_to,
+                                                cleanup_call,
                                                 twilio_message, user_message)
 from twilio_agent.actions.telegram_actions import send_telegram_notification
 from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
@@ -31,7 +32,11 @@ from twilio_agent.ui import router as ui_router
 from twilio_agent.utils.ai import (classify_intent, extract_location,
                                    yes_no_question)
 from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.location_utils import check_location
+from twilio_agent.utils.location_utils import (
+    GeocodeResult,
+    check_location,
+    get_geocode_result,
+)
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
 
 dotenv.load_dotenv()
@@ -99,8 +104,6 @@ async def incoming_call(request: Request):
     live_url = await send_telegram_notification(caller_number)
     logger.info(f"Telegram live UI URL: {live_url}")
 
-    asyncio.create_task(start_recording(form_data.get("CallSid"), caller_number))
-
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
     intent = get_intent(caller_number)
 
@@ -131,34 +134,37 @@ async def incoming_call(request: Request):
                     start_transfer(response, caller_number)
                     return send_request(request, response)
                 case _:
+                    asyncio.create_task(start_recording(form_data.get("CallSid"), caller_number))
                     return await greeting(request)
 
 
 async def greeting(request: Request):
     with new_response() as response:
+        message = "Hallo, Schön das du bei uns anrufst. Du sprichst mit dem Assistent der Notdienststation, ich verbinde dich gleich mit dem richtigen Ansprechpartner! Wie kann ich dir helfen?"
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="speech",
             language="de-DE",
             action="/parse-intent-1",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        message = "Hallo, Schön das du bei uns anrufst. Du sprichst mit dem Assistent der Notdienststation, ich verbinde dich gleich mit dem richtigen Ansprechpartner! Wie kann ich dir helfen?"
-        say(gather, message)
-        agent_message(await caller(request), message)
         response.append(gather)
+        
+        say(response, "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.")
+        
         gather2 = Gather(
             input="speech",
             language="de-DE",
             action="/parse-intent-1",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
-        )
-        say(
-            gather2,
-            "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.",
+            enhanced=True,
+            model="phone_call",
         )
         response.append(gather2)
         await fallback_no_response(response, request)
@@ -191,31 +197,33 @@ async def parse_intent_1(request: Request):
 
 async def intent_not_understood(request: Request):
     with new_response() as response:
+        message = (
+            "Leider konnte ich deine Anfrage nicht verstehen. Wie kann ich dir helfen?"
+        )
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="speech",
             language="de-DE",
             action="/parse-intent-2",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        message = (
-            "Leider konnte ich deine Anfrage nicht verstehen. Wie kann ich dir helfen?"
-        )
-        say(gather, message)
-        agent_message(await caller(request), message)
         response.append(gather)
+        
+        say(response, "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.")
+        
         gather2 = Gather(
             input="speech",
             language="de-DE",
             action="/parse-intent-1",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
-        )
-        say(
-            gather2,
-            "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.",
+            enhanced=True,
+            model="phone_call",
         )
         response.append(gather2)
         await fallback_no_response(response, request)
@@ -252,27 +260,32 @@ async def parse_intent_2(request: Request):
 
 async def address_query_locksmith(request: Request):
     with new_response() as response:
+        message = "Um die Kosten und Wartezeit zu berechnen, benötige ich deine Adresse. Bitte nenne mir Straße, Hausnummer, Postleitzahl und Ort."
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="speech",
             language="de-DE",
             action="/parse-location-locksmith",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        message = "Um die Kosten und Wartezeit zu berechnen, benötige ich deine Adresse. Bitte nenne mir Straße, Hausnummer, Postleitzahl und Ort."
-        agent_message(await caller(request), message)
-        say(gather, message)
         response.append(gather)
+        
+        say(response, "Bitte nenne mir Straße, Hausnummer, Postleitzahl und Ort.")
+        
         gather2 = Gather(
             input="speech",
             language="de-DE",
             action="/parse-location-locksmith",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        say(gather2, "Bitte nenne mir Straße, Hausnummer, Postleitzahl und Ort.")
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
@@ -284,75 +297,66 @@ async def parse_location_locksmith(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
 
-    location, duration = extract_location(speech_result)
-    logger.info("Location extracted: %s", location)
-
-    ai_message(await caller(request), f"<Location extracted: {location}>", duration)
-    location_keys_german = {
-        "plz": "PLZ",
-        "ort": "Ort",
-        "strasse": "Straße",
-        "hausnummer": "Hausnummer",
-    }
-    for key in location:
-        if location[key]:
-            save_job_info(
-                await caller(request), location_keys_german.get(key, key), location[key]
-            )
-
-    location_result = check_location(location["plz"], location["ort"])
+    location = get_geocode_result(speech_result)
+    
     with new_response() as response:
-        if location_result:
-            save_location(await caller(request), location_result)
+        if location and (location.plz or location.ort):
+            save_location(await caller(request), location._asdict())
+            place = " ".join(filter(None, [" ".join(str(location.plz)), location.ort])).strip()
+            message = f"Als Ort habe ich {place} erkannt. Ist das richtig?"
+            say(response, message)
+            agent_message(await caller(request), message)
+            
             gather = Gather(
                 input="speech",
                 language="de-DE",
                 action="/parse-location-correct-locksmith",
-                speechModel="deepgram_nova-3",
                 speechTimeout="auto",
                 timeout=15,
+                enhanced=True,
+                model="phone_call",
             )
-            message = (
-                "Als Ort habe ich "
-                + location_result["written_plz"]
-                + " "
-                + location_result["place"]
-                + " erkannt. Ist das richtig?"
-            )
-            agent_message(await caller(request), message)
-            say(gather, message)
             response.append(gather)
+            
+            say(response, "Bitte bestätige, ob die Adresse korrekt ist.")
+            
             gather2 = Gather(
                 input="speech",
                 language="de-DE",
                 action="/parse-location-correct-locksmith",
-                speechModel="deepgram_nova-3",
                 speechTimeout="auto",
                 timeout=15,
+                enhanced=True,
+                model="phone_call",
             )
-            say(gather2, "Bitte bestätige, ob die Adresse korrekt ist.")
             response.append(gather2)
             await fallback_no_response(response, request)
             return send_request(request, response)
         else:
+            message = "Ich konnte den Ort nicht finden. Bitte gib die Postleitzahl auf dem Nummernblock ein."
+            say(response, message)
+            agent_message(await caller(request), message)
+            
             gather = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
                 timeout=10,
                 numDigits=5,
+                enhanced=True,
+                model="phone_call",
             )
-            message = "Ich konnte den Ort nicht finden. Bitte gib die Postleitzahl auf dem Nummernblock ein."
-            agent_message(await caller(request), message)
-            say(gather, message)
             response.append(gather)
-            response.append(gather)
+            
+            say(response, "Bitte gib die Postleitzahl erneut ein.")
+            
             gather2 = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
                 timeout=10,
                 numDigits=5,
+                enhanced=True,
+                model="phone_call",
             )
-            say(gather2, "Bitte gib die Postleitzahl erneut ein.")
             response.append(gather2)
             await fallback_no_response(response, request)
             return send_request(request, response)
@@ -365,28 +369,36 @@ async def parse_location_correct_locksmith(request: Request):
     correct, duration = yes_no_question(
         speech_result, "Der Kunde wurde gefragt ob die Adresse korrekt ist."
     )
+    ai_message(await caller(request), f"<Location correct: {correct}>", duration)
     user_message(await caller(request), speech_result)
     with new_response() as response:
         if correct:
             return await calculate_cost_locksmith(request)
         else:
+            message = "Bitte gib die Postleitzahl auf dem Nummernblock ein oder drücke die einz falls du deine Postleitzahl nicht kennst."
+            say(response, message)
+            agent_message(await caller(request), message)
+            
             gather = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
                 numDigits=5,
                 timeout=10,
+                enhanced=True,
+                model="phone_call",
             )
-            message = "Bitte gib die Postleitzahl auf dem Nummernblock ein oder drücke die einz falls du deine Postleitzahl nicht kennst."
-            agent_message(await caller(request), message)
-            say(gather, message)
             response.append(gather)
+            
+            say(response, "Bitte gib die Postleitzahl erneut ein.")
+            
             gather2 = Gather(
                 input="dtmf",
                 action="/parse-location-numberblock-locksmith",
                 numDigits=5,
                 timeout=10,
+                enhanced=True,
+                model="phone_call",
             )
-            say(gather2, "Bitte gib die Postleitzahl erneut ein.")
             response.append(gather2)
             await fallback_no_response(response, request)
             return send_request(request, response)
@@ -413,7 +425,22 @@ async def parse_location_numberblock_locksmith(request: Request):
 
 async def calculate_cost_locksmith(request: Request):
     location = get_location(await caller(request))
-    price, duration, provider, phone = get_price_locksmith(location)
+    try:
+        longitude = float(location["longitude"])
+        latitude = float(location["latitude"])
+    except (KeyError, TypeError, ValueError) as exc:
+        ai_message(
+            await caller(request),
+            f"<Locksmith pricing failed: missing coordinates ({exc})>",
+        )
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
+
+    price, duration, provider, phone = get_price_locksmith(longitude, latitude)
     german_keys = {
         "price": "Preis",
         "duration": "Wartezeit",
@@ -426,27 +453,32 @@ async def calculate_cost_locksmith(request: Request):
     await add_locksmith_contacts(request)
 
     with new_response() as response:
+        message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="speech",
             language="de-DE",
             action="/parse-connection-request-locksmith",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
-        agent_message(await caller(request), message)
-        say(gather, message)
         response.append(gather)
+        
+        say(response, "Bitte sage ja oder nein.")
+        
         gather2 = Gather(
             input="speech",
             language="de-DE",
             action="/parse-connection-request-locksmith",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        say(gather2, "Bitte sage ja oder nein.")
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
@@ -481,27 +513,32 @@ async def know_plz_towing(request: Request):
     await add_towing_contacts(request)
 
     with new_response() as response:
+        message = "Kennst du die Postleitzahl von dem Ort an dem du gerade bist?"
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="speech",
             language="de-DE",
             action="/parse-know-plz-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        message = "Kennst du die Postleitzahl von dem Ort an dem du gerade bist?"
-        agent_message(await caller(request), message)
-        say(gather, message)
         response.append(gather)
+        
+        say(response, "Bitte sage ja oder nein.")
+        
         gather2 = Gather(
             input="speech",
             language="de-DE",
             action="/parse-know-plz-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        say(gather2, "Bitte sage ja oder nein.")
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
@@ -526,23 +563,30 @@ async def parse_know_plz_towing(request: Request):
 
 async def ask_plz_towing(request: Request):
     with new_response() as response:
+        message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein."
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="dtmf",
             action="/parse-plz-towing",
             timeout=10,
             numDigits=5,
+            enhanced=True,
+            model="phone_call",
         )
-        message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein."
-        agent_message(await caller(request), message)
-        say(gather, message)
         response.append(gather)
+        
+        say(response, "Bitte gib die Postleitzahl erneut ein.")
+        
         gather2 = Gather(
             input="dtmf",
             action="/parse-plz-towing",
             numDigits=5,
             timeout=10,
+            enhanced=True,
+            model="phone_call",
         )
-        say(gather2, "Bitte gib die Postleitzahl erneut ein.")
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
@@ -567,23 +611,30 @@ async def parse_plz_towing(request: Request):
             return await calculate_cost_towing(request)
         else:
             ai_message(await caller(request), f"<Location not found for PLZ: {plz}>")
+            message = "Leider konnte ich den Ort nicht finden. Bitte gib die Postleitzahl erneut ein."
+            say(response, message)
+            agent_message(await caller(request), message)
+            
             gather = Gather(
                 input="dtmf",
                 action="/parse-plz-towing-retry",
                 numDigits=5,
                 timeout=10,
+                enhanced=True,
+                model="phone_call",
             )
-            message = "Leider konnte ich den Ort nicht finden. Bitte gib die Postleitzahl erneut ein."
-            agent_message(await caller(request), message)
-            say(gather, message)
             response.append(gather)
+            
+            say(response, "Bitte gib die Postleitzahl erneut ein.")
+            
             gather2 = Gather(
                 input="dtmf",
                 action="/parse-plz-towing-retry",
                 numDigits=5,
                 timeout=10,
+                enhanced=True,
+                model="phone_call",
             )
-            say(gather2, "Bitte gib die Postleitzahl erneut ein.")
             response.append(gather2)
             await fallback_no_response(response, request)
             return send_request(request, response)
@@ -625,27 +676,32 @@ async def calculate_cost_towing(request: Request):
         save_job_info(await caller(request), german_keys[key], locals()[key])
 
     with new_response() as response:
+        message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="speech",
             language="de-DE",
             action="/parse-connection-request-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
-        agent_message(await caller(request), message)
-        say(gather, message)
         response.append(gather)
+        
+        say(response, "Bitte sage ja oder nein.")
+        
         gather2 = Gather(
             input="speech",
             language="de-DE",
             action="/parse-connection-request-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        say(gather2, "Bitte sage ja oder nein.")
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
@@ -674,27 +730,32 @@ async def parse_connection_request_towing(request: Request):
 
 async def ask_send_sms_towing(request: Request):
     with new_response() as response:
+        message = "Wir können dir eine SMS mit einem Link zusenden, der uns deinen Standort übermittelt. Bist du damit einverstanden?"
+        say(response, message)
+        agent_message(await caller(request), message)
+        
         gather = Gather(
             input="speech",
             language="de-DE",
             action="/parse-send-sms-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        message = "Wir können dir eine SMS mit einem Link zusenden, der uns deinen Standort übermittelt. Bist du damit einverstanden?"
-        agent_message(await caller(request), message)
-        say(gather, message)
         response.append(gather)
+        
+        say(response, "Möchtest du eine SMS mit dem Link erhalten?")
+        
         gather2 = Gather(
             input="speech",
             language="de-DE",
             action="/parse-send-sms-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
             timeout=15,
+            enhanced=True,
+            model="phone_call",
         )
-        say(gather2, "Möchtest du eine SMS mit dem Link erhalten?")
         response.append(gather2)
         await fallback_no_response(response, request)
         return send_request(request, response)
@@ -732,6 +793,7 @@ async def send_sms_towing(request: Request):
         agent_message(await caller(request), message)
         say(response, message)
         save_job_info(await caller(request), "hangup_reason", "Warte auf Standort per SMS")
+        save_job_info(await caller(request), "waiting_for_sms", "Ja")
         return send_request(request, response)
 
 
@@ -776,6 +838,9 @@ async def status(request: Request):
 
     if not get_job_info(await caller(request), "hangup_reason"):
         save_job_info(await caller(request), "hangup_reason", "Anruf durch Kunde beendet")
+
+    if not get_job_info(await caller(request), "waiting_for_sms"):
+        cleanup_call(await caller(request))
 
     return JSONResponse(content={"status": "ok"})
 

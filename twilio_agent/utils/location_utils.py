@@ -1,88 +1,129 @@
 import json
-import logging
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import NamedTuple, Optional
 
-from Levenshtein import distance
-from pydantic import BaseModel
-
-logger = logging.getLogger("uvicorn")
-
-
-def _convert_plz_to_written_numbers(plz: str):
-    plz_written = ""
-    for digit in str(plz):
-        match digit:
-            case "0":
-                plz_written += "null "
-            case "1":
-                plz_written += "eins "
-            case "2":
-                plz_written += "zwei "
-            case "3":
-                plz_written += "drei "
-            case "4":
-                plz_written += "vier "
-            case "5":
-                plz_written += "fünf "
-            case "6":
-                plz_written += "sechs "
-            case "7":
-                plz_written += "sieben "
-            case "8":
-                plz_written += "acht "
-            case "9":
-                plz_written += "neun "
-    return plz_written[:-1]
+import requests
+from dotenv import load_dotenv
 
 
-def _search_zipcode(plz: str):
-    if len(plz) == 5:
-        json_data = json.load(open("data/zipcodes.de.json", encoding="utf-8"))
-    elif len(plz) == 4:
-        json_data = json.load(open("data/zipcodes.at.json", encoding="utf-8"))
-
-    for entry in json_data:
-        if entry["zipcode"] == plz:
-            return entry
-
-    return None
+class GeocodeResult(NamedTuple):
+    latitude: float
+    longitude: float
+    formatted_address: str
+    google_maps_link: str
+    plz: Optional[str]
+    ort: Optional[str]
 
 
-def _search_city(ort: str):
-
-    json_data_de = json.load(open("data/zipcodes.de.json", encoding="utf-8"))
-    json_data_at = json.load(open("data/zipcodes.at.json", encoding="utf-8"))
-
-    ort_lower = ort.lower()
-    best_match = None
-    min_distance = float("inf")
-
-    for entry in json_data_de + json_data_at:
-        place_lower = entry["place"].lower()
-        levenshtein_distance = distance(ort_lower, place_lower)
-
-        if levenshtein_distance <= 2 and levenshtein_distance < min_distance:
-            min_distance = levenshtein_distance
-            best_match = entry
-
-        if place_lower == ort_lower:
-            return entry
-
-    return best_match
+load_dotenv()
+API_KEY = os.getenv("MAPS_API_KEY")
+GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+ZIPCODE_FILES = ("zipcodes.de.json", "zipcodes.at.json")
 
 
-def check_location(plz: str, ort: str):
-    if plz:
-        result = _search_zipcode(plz)
-        if result:
-            result["written_plz"] = _convert_plz_to_written_numbers(result["zipcode"])
-            return result
-    elif ort:
-        result = _search_city(ort)
-        if result:
-            result["written_plz"] = _convert_plz_to_written_numbers(result["zipcode"])
-            return result
-    return None
+def _fetch_first_result(params: dict) -> Optional[dict]:
+    try:
+        response = requests.get(GEOCODE_URL, params=params)
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as exc:
+        print(f"Request failed: {exc}")
+        return None
+
+    if data.get("status") != "OK":
+        print(f"API error: {data.get('status')} - {data.get('error_message', 'No error message')}")
+        return None
+
+    results = data.get("results") or []
+    if not results:
+        print("No results found")
+        return None
+
+    return results[0]
 
 
-if __name__ == "__main__":
-    print(check_location(None, "Deggendoof"))
+def _extract_plz_ort(result: dict) -> tuple[Optional[str], Optional[str]]:
+    postal = city = None
+
+    for component in result.get("address_components", []):
+        types = component.get("types", [])
+        name = component.get("long_name")
+
+        if not postal and "postal_code" in types and name:
+            postal = name.replace(" ", "")
+        if not city and any(t in types for t in ("locality", "postal_town", "administrative_area_level_3")):
+            city = name
+
+    if not city:
+        for component in result.get("address_components", []):
+            if any(t in component.get("types", []) for t in ("administrative_area_level_2", "administrative_area_level_1")):
+                city = component.get("long_name")
+                break
+
+    return postal, city
+
+
+def get_geocode_result(address: str) -> Optional[GeocodeResult]:
+    if not API_KEY:
+        raise ValueError("MAPS_API_KEY environment variable is not set")
+
+    forward = _fetch_first_result({"address": address, "key": API_KEY, "region": "de", "language": "de"})
+    if not forward:
+        return None
+
+    location = forward["geometry"]["location"]
+    latitude, longitude = location["lat"], location["lng"]
+
+    reverse = _fetch_first_result({"latlng": f"{latitude},{longitude}", "key": API_KEY, "language": "de"})
+    result = reverse or forward
+    plz, ort = _extract_plz_ort(result)
+
+    return GeocodeResult(
+        latitude=latitude,
+        longitude=longitude,
+        formatted_address=result.get("formatted_address", ""),
+        google_maps_link=f"https://www.google.com/maps?q={latitude},{longitude}",
+        plz=plz,
+        ort=ort,
+    )
+
+
+@lru_cache()
+def _load_zipcode_entries() -> list[dict]:
+    entries: list[dict] = []
+    for filename in ZIPCODE_FILES:
+        path = DATA_DIR / filename
+        if path.exists():
+            with path.open(encoding="utf-8") as handle:
+                entries.extend(json.load(handle))
+    return entries
+
+
+def check_location(zipcode: str, city: Optional[str]) -> Optional[dict]:
+    zipcode = (zipcode or "").strip()
+    if not zipcode:
+        return None
+
+    entries = [entry for entry in _load_zipcode_entries() if entry.get("zipcode", "").startswith(zipcode)]
+    if city:
+        city_lower = city.lower()
+        city_matches = [entry for entry in entries if entry.get("place", "").lower() == city_lower]
+        if city_matches:
+            entries = city_matches
+
+    if not entries:
+        return None
+
+    best = entries[0]
+    latitude = best.get("latitude")
+    longitude = best.get("longitude")
+    return {
+        "zipcode": best.get("zipcode"),
+        "place": best.get("place"),
+        "latitude": float(latitude) if latitude else None,
+        "longitude": float(longitude) if longitude else None,
+    }
+

@@ -14,6 +14,7 @@ from twilio.twiml.voice_response import (Connect, Dial, Gather, Number,
 from twilio_agent.actions.redis_actions import (agent_message, get_job_info,
                                                 get_next_caller_in_queue,
                                                 get_shared_location,
+                                                delete_job_info,
                                                 save_job_info, user_message)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.pricing import get_price_towing_coordinates
@@ -94,6 +95,7 @@ def outbound_call_after_sms(to: str):
         "Google Maps Link",
         f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}",
     )
+    delete_job_info(to, "waiting_for_sms")
     user_message(
         to,
         f"https://maps.google.com/?q={location_data['latitude']},{location_data['longitude']}",
@@ -111,8 +113,9 @@ def outbound_call_after_sms(to: str):
             input="speech",
             language="de-DE",
             action=f"{server_url}/parse-connection-request-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
+            speechModel="phone_call",
+            enhanced=True,
             timeout=15,
         )
         message = f"Hier ist die Notdienststation. Wie haben deinen Standort erhalten. Der Preis für den Abschleppdienst beträgt {price} Euro. Die Ankunftszeit beträgt ungefähr {duration} Minuten. Möchtest du den Abschleppdienst jetzt beauftragen?"
@@ -123,8 +126,9 @@ def outbound_call_after_sms(to: str):
             input="speech",
             language="de-DE",
             action=f"{server_url}/parse-connection-request-towing",
-            speechModel="deepgram_nova-3",
             speechTimeout="auto",
+            speechModel="phone_call",
+            enhanced=True,
             timeout=15,
         )
         say(gather2, "Bitte sagen Sie Ja oder Nein.")

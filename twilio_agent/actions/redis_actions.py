@@ -20,16 +20,26 @@ persistance_time = 60 * 60  # 1 hour
 def _set_hist_info(call_number: str, key: str, value: str) -> str:
     if call_number == "anonymous":
         return
-    redis_content = redis.get(
-        f"verlauf:{call_number.replace('+', '00')}:{redis.get(f'anrufe:{call_number}:gestartet_um').decode('utf-8')}:info"
+    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    if not start_time:
+        logger.debug(
+            "Skipping history update for %s because no start time is stored.",
+            call_number,
+        )
+        return
+
+    history_key = (
+        f"verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:info"
     )
+
+    redis_content = redis.get(history_key)
     if redis_content:
         content = yaml.safe_load(redis_content.decode("utf-8"))
     else:
         content = []
     content.append({key: value})
     redis.set(
-        f"verlauf:{call_number.replace('+', '00')}:{redis.get(f'anrufe:{call_number}:gestartet_um').decode('utf-8')}:info",
+        history_key,
         yaml.dump(content, default_flow_style=False, allow_unicode=True),
     )
 
@@ -160,6 +170,10 @@ def save_job_info(caller: str, detail_name: str, detail_value: str):
     redis.set(f"anrufe:{caller}:{detail_name}", detail_value, ex=persistance_time)
 
 
+def delete_job_info(caller: str, detail_name: str):
+    redis.delete(f"anrufe:{caller}:{detail_name}")
+
+
 def get_job_info(caller: str, detail_name: str) -> str | None:
     detail = redis.get(f"anrufe:{caller}:{detail_name}")
     if detail:
@@ -262,3 +276,19 @@ def get_call_recording_binary(number: str, timestamp: str):
         return None, None
 
     return audio_bytes, payload.get("content_type", "audio/mpeg")
+
+
+def cleanup_call(call_number: str):
+    if call_number == "anonymous":
+        return
+    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    if not start_time:
+        return
+
+    keys_to_delete = [
+        f"anrufe:{call_number}:gestartet_um",
+        f"anrufe:{call_number}:warteschlange",
+    ]
+
+    for key in keys_to_delete:
+        redis.delete(key)

@@ -65,7 +65,7 @@ def _origin_from_location(location: dict):
     )
 
 
-def _origin_from_coordinates(longitude: str, latitude: str):
+def _origin_from_coordinates(longitude, latitude):
     return routing_v2.Waypoint(
         location=routing_v2.Location(
             lat_lng=latlng_pb2.LatLng(
@@ -97,9 +97,9 @@ def _service_price(origin: routing_v2.Waypoint, intent: str, tiers, fallback):
     return price, max(minutes, 10), provider["name"], provider["phone"]
 
 
-def get_price_locksmith(location: dict):
+def get_price_locksmith(longitude, latitude):
     return _service_price(
-        _origin_from_location(location),
+        _origin_from_coordinates(longitude, latitude),
         "locksmith",
         LOCKSMITH_TIERS,
         LOCKSMITH_FALLBACK,
@@ -126,5 +126,5 @@ def get_price_towing_coordinates(longitude: str, latitude: str):
 
 if __name__ == "__main__":
     print(get_price_towing_coordinates("13.388860", "52.517037"))
-    print(get_price_locksmith({"zipcode": "10115", "place": "Berlin"}))
+    print(get_price_locksmith("13.4050", "52.5200"))
     print(get_price_towing({"zipcode": "40210", "place": "Düsseldorf"}))
