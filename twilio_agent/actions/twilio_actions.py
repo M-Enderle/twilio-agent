@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import time
@@ -16,7 +17,8 @@ from twilio_agent.actions.redis_actions import (agent_message, get_intent,
                                                 get_next_caller_in_queue,
                                                 get_shared_location,
                                                 delete_job_info,
-                                                save_job_info, google_message)
+                                                save_job_info, google_message,
+                                                get_location)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.pricing import (get_price_locksmith,
                                         get_price_towing_coordinates)
@@ -79,13 +81,15 @@ def send_sms_with_link(to: str):
 
     message_body = f"""Hallo, hier ist die Notdienststation. 🚗⚠️
     
-    Bitte teile uns deinen Standort mit, indem du auf den folgenden Link klickst: {location_link} 📍"""
+Bitte teile uns deinen Standort mit, indem du auf den folgenden Link klickst: {location_link} 📍"""
 
     client.messages.create(
         body=message_body,
         from_=twilio_phone_number,
         to=to,
     )
+    
+    logger.info(f"SMS with link sent to {to}")
 
 
 def outbound_call_after_sms(to: str):
@@ -189,7 +193,7 @@ def outbound_call_after_sms(to: str):
         client.calls.create(
             twiml=response,
             to=to,
-            from_=twilio_phone_number,
+            from_="+491604996655",
             record=True,
             recording_status_callback_method="POST",
             recording_status_callback=f"{server_url}/recording-status-callback/{to.replace('+', '00')}?source=followup",
@@ -209,13 +213,14 @@ async def fallback_no_response(response: VoiceResponse, request: Request):
 def send_job_details_sms(caller: str, transferred_to: str):
     """Send SMS with job details to the person who was transferred to"""
 
-    location = get_job_info(caller, "standort")
-    if not location:
+    try:
+        location = get_location(caller)
+    except (json.JSONDecodeError, TypeError, AttributeError):
         location = {}
 
     message_body = f"""Anrufdetails:
 📞 Anrufer: {caller}
-📍 Erkannter Ort: {location.get('zipcode')} {location.get('place')}
+📍 Erkannter Ort: {location.get('zipcode', '')} {location.get('place', '')}
 💰 Genannter Preis: {get_job_info(caller, 'Preis')} Euro
 ⏰ Genannte Wartezeit: {get_job_info(caller, 'Wartezeit')} Minuten"""
 
@@ -231,7 +236,7 @@ def start_transfer(response: VoiceResponse, caller: str) -> str:
     next_caller = get_next_caller_in_queue(caller)
     if not next_caller:
         return "no_more_agents"
-    tr = Dial(action=f"{server_url}/parse-transfer-call/{next_caller}", timeout=10)
+    tr = Dial(action=f"{server_url}/parse-transfer-call/{next_caller}", timeout=10, callerId=twilio_phone_number)
     phone_number = contact_manager.get_phone(next_caller)
     tr.append(Number(phone_number))
     response.append(tr)

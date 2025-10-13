@@ -302,8 +302,15 @@ async def parse_address_query_unified(request: Request):
         save_job_info(await caller(request), "Adresse unbekannt", "Ja")
         return await ask_send_sms_unified(request)
     
-    # Try to parse the address they named
     location = get_geocode_result(speech_result)
+    
+    if not location:
+    
+        ai_result, duration = extract_location(speech_result)
+        ai_message(await caller(request), f"<AI location extraction: {ai_result}>", duration)
+            
+        # Try to parse the address they named
+        location = get_geocode_result(ai_result)
     
     with new_response() as response:
         if location and (location.plz or location.ort):
@@ -432,8 +439,10 @@ async def parse_location_correct_unified(request: Request):
     correct, duration = yes_no_question(
         speech_result, "Der Kunde wurde gefragt ob die Adresse korrekt ist."
     )
-    google_message(await caller(request), f"Adresse bestätigt: {correct}", duration)
+    
     user_message(await caller(request), speech_result)
+    ai_message(await caller(request), f"<Address correct: {correct}>", duration)
+    
     with new_response() as response:
         if correct:
             return await calculate_cost_unified(request)
@@ -617,10 +626,10 @@ async def add_locksmith_contacts(request: Request):
 
 async def add_towing_contacts(request: Request):
     clear_caller_queue(await caller(request))
-    add_to_caller_queue(await caller(request), "Markus")
+    add_to_caller_queue(await caller(request), "Andi")
     add_to_caller_queue(await caller(request), "Nils")
     add_to_caller_queue(await caller(request), "Oemer")
-    save_job_info(await caller(request), "Anruf Warteschlange", "Markus, Nils, Ömer")
+    save_job_info(await caller(request), "Anruf Warteschlange", "Andi, Nils, Ömer")
 
 
 async def end_call(request: Request, with_message: bool = True):
