@@ -104,6 +104,9 @@ async def incoming_call(request: Request):
     previous_transferred_to = get_transferred_to(caller_number)
     with new_response() as response:
         if previous_transferred_to:
+
+            previous_transferred_to = previous_transferred_to.decode('utf-8') if isinstance(previous_transferred_to, bytes) else previous_transferred_to
+
             save_job_info(caller_number, "Zuvor Angerufen", "Ja")
             save_job_info(
                 caller_number,
