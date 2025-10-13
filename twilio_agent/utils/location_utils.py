@@ -126,4 +126,3 @@ def check_location(zipcode: str, city: Optional[str]) -> Optional[dict]:
         "latitude": float(latitude) if latitude else None,
         "longitude": float(longitude) if longitude else None,
     }
-
