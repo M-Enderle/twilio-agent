@@ -455,6 +455,16 @@ async def parse_location_correct_unified(request: Request):
 
 
 async def ask_send_sms_unified(request: Request):
+
+    # if user is anonymous, skip SMS step
+    if caller(request) == "anonymous":
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
+
     with new_response() as response:
         message = "Wir können dir eine SMS mit einem Link zusenden, der uns deinen Standort übermittelt. Bist du damit einverstanden?"
         say(response, message)
