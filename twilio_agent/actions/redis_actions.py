@@ -45,8 +45,6 @@ def _recording_key(
 
 
 def _set_hist_info(call_number: str, key: str, value: str) -> str:
-    if call_number == "anonymous":
-        return
     start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
     if not start_time:
         logger.debug(
@@ -220,8 +218,6 @@ def get_job_info(caller: str, detail_name: str) -> str | None:
 def get_call_timestamp(call_number: str) -> str | None:
     """Get the timestamp for when a call was started"""
     try:
-        if call_number == "anonymous":
-            return None
         timestamp = redis.get(f"anrufe:{call_number}:gestartet_um")
         if timestamp:
             return timestamp.decode("utf-8")
@@ -341,8 +337,6 @@ def get_available_recordings(number: str, timestamp: str) -> dict[str, dict]:
 
 
 def cleanup_call(call_number: str):
-    if call_number == "anonymous":
-        return
     start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
     if not start_time:
         return

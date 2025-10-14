@@ -142,9 +142,8 @@ async def incoming_call(request: Request):
                     start_transfer(response, caller_number)
                     return send_request(request, response)
                 case _:
-                    asyncio.create_task(
-                        start_recording(form_data.get("CallSid"), caller_number)
-                    )
+                    if caller_number != "anonymous":
+                        asyncio.create_task(start_recording(form_data.get("CallSid"), caller_number))
                     return await greeting(request)
 
 
