@@ -18,17 +18,12 @@ async def send_telegram_notification(caller_number: str) -> str:
         formatted_number = caller_number.replace("+", "00")
         server_url = os.getenv("SERVER_URL", "https://localhost:8000")
         live_ui_url = f"{server_url}/details/{formatted_number}/{timestamp}"
-        (
-            await send_message(
-                live_ui_url, caller_number, os.getenv("TELEGRAM_CHAT_ID")
-            )
-            if not "17657888" in caller_number
-            else None
-        )
-        await send_message(live_ui_url, caller_number, "6919860852")
+        asyncio.create_task(send_message(live_ui_url, caller_number, os.getenv("TELEGRAM_CHAT_ID"))) if "17657888" not in caller_number else None
+        asyncio.create_task(send_message(live_ui_url, caller_number, "6919860852"))
         return live_ui_url
 
     except Exception as e:
+        print(f"Error sending Telegram notification: {e}")
         return ""
 
 
@@ -50,6 +45,7 @@ async def send_message(tracking_url: str, phone: str, chat_id: str = None):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
+        print(f"Sending message to {chat_id}: {message}, {reply_markup}")
         await bot.send_message(chat_id=chat_id, text=message, reply_markup=reply_markup)
         print("Message sent successfully!")
     except Exception as e:
