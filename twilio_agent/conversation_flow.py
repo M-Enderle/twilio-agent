@@ -2,42 +2,49 @@ import asyncio
 import logging
 
 import dotenv
+import Levenshtein
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from twilio.twiml.voice_response import Gather
 
-from twilio_agent.actions.location_sharing_actions import \
-    router as location_router
+from twilio_agent.actions.location_sharing_actions import router as location_router
 from twilio_agent.actions.recording_actions import router as recording_router
 from twilio_agent.actions.recording_actions import start_recording
-from twilio_agent.actions.redis_actions import (add_to_caller_queue,
-                                                agent_message, ai_message,
-                                                clear_caller_queue,
-                                                delete_next_caller, get_intent,
-                                                get_job_info, get_location,
-                                                get_transferred_to,
-                                                init_new_call, save_job_info,
-                                                save_location, set_intent,
-                                                set_transferred_to,
-                                                cleanup_call,
-                                                google_message,
-                                                twilio_message, user_message)
-from twilio_agent.actions.telegram_actions import send_telegram_notification
-from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
-                                                 new_response, say,
-                                                 send_job_details_sms,
-                                                 send_request,
-                                                 send_sms_with_link,
-                                                 start_transfer)
-from twilio_agent.ui import router as ui_router
-from twilio_agent.utils.ai import (classify_intent, extract_location,
-                                   yes_no_question)
-from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.location_utils import (
-    GeocodeResult,
-    check_location,
-    get_geocode_result,
+from twilio_agent.actions.redis_actions import (
+    add_to_caller_queue,
+    agent_message,
+    ai_message,
+    cleanup_call,
+    clear_caller_queue,
+    delete_next_caller,
+    get_intent,
+    get_job_info,
+    get_location,
+    get_transferred_to,
+    google_message,
+    init_new_call,
+    save_job_info,
+    save_location,
+    set_intent,
+    set_transferred_to,
+    twilio_message,
+    user_message,
 )
+from twilio_agent.actions.telegram_actions import send_telegram_notification
+from twilio_agent.actions.twilio_actions import (
+    caller,
+    fallback_no_response,
+    new_response,
+    say,
+    send_job_details_sms,
+    send_request,
+    send_sms_with_link,
+    start_transfer,
+)
+from twilio_agent.ui import router as ui_router
+from twilio_agent.utils.ai import classify_intent, extract_location, yes_no_question
+from twilio_agent.utils.contacts import ContactManager
+from twilio_agent.utils.location_utils import check_location, get_geocode_result
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
 
 dotenv.load_dotenv()
@@ -105,7 +112,11 @@ async def incoming_call(request: Request):
     with new_response() as response:
         if previous_transferred_to:
 
-            previous_transferred_to = previous_transferred_to.decode('utf-8') if isinstance(previous_transferred_to, bytes) else previous_transferred_to
+            previous_transferred_to = (
+                previous_transferred_to.decode("utf-8")
+                if isinstance(previous_transferred_to, bytes)
+                else previous_transferred_to
+            )
 
             save_job_info(caller_number, "Zuvor Angerufen", "Ja")
             save_job_info(
@@ -131,7 +142,9 @@ async def incoming_call(request: Request):
                     start_transfer(response, caller_number)
                     return send_request(request, response)
                 case _:
-                    asyncio.create_task(start_recording(form_data.get("CallSid"), caller_number))
+                    asyncio.create_task(
+                        start_recording(form_data.get("CallSid"), caller_number)
+                    )
                     return await greeting(request)
 
 
@@ -140,7 +153,7 @@ async def greeting(request: Request):
         message = "Hallo, Schön das du bei uns anrufst. Du sprichst mit dem Assistent der Notdienststation, ich verbinde dich gleich mit dem richtigen Ansprechpartner! Wie kann ich dir helfen?"
         say(response, message)
         agent_message(await caller(request), message)
-        
+
         gather = Gather(
             input="speech",
             language="de-DE",
@@ -151,9 +164,12 @@ async def greeting(request: Request):
             model="default",
         )
         response.append(gather)
-        
-        say(response, "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.")
-        
+
+        say(
+            response,
+            "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.",
+        )
+
         gather2 = Gather(
             input="speech",
             language="de-DE",
@@ -173,9 +189,20 @@ async def parse_intent_1(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    classification, duration = classify_intent(speech_result)
+    try:
+        classification, reasoning, duration = await asyncio.wait_for(
+            asyncio.to_thread(classify_intent, speech_result), timeout=6.0
+        )
+    except asyncio.TimeoutError:
+        ai_message(await caller(request), "<Request timed out>", 6.0)
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
     ai_message(
-        await caller(request), f"<Request classified as {classification}>", duration
+        await caller(request), f"<Request classified as {classification}. Reasoning: {reasoning}>", duration
     )
     match classification:
         case "schlüsseldienst":
@@ -199,7 +226,7 @@ async def intent_not_understood(request: Request):
         )
         say(response, message)
         agent_message(await caller(request), message)
-        
+
         gather = Gather(
             input="speech",
             language="de-DE",
@@ -210,9 +237,12 @@ async def intent_not_understood(request: Request):
             model="experimental_conversations",
         )
         response.append(gather)
-        
-        say(response, "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.")
-        
+
+        say(
+            response,
+            "Bitte beschreibe dein Anliegen damit ich dich mit dem richtigen Ansprechpartner verbinden kann.",
+        )
+
         gather2 = Gather(
             input="speech",
             language="de-DE",
@@ -232,9 +262,20 @@ async def parse_intent_2(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    classification, duration = classify_intent(speech_result)
+    try:
+        classification, reasoning, duration = await asyncio.wait_for(
+            asyncio.to_thread(classify_intent, speech_result), timeout=6.0
+        )
+    except asyncio.TimeoutError:
+        ai_message(await caller(request), "<Request timed out>", 6.0)
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
     ai_message(
-        await caller(request), f"<Request classified as {classification}>", duration
+        await caller(request), f"<Request classified as {classification}. Reasoning: {reasoning}>", duration
     )
     match classification:
         case "schlüsseldienst":
@@ -263,7 +304,7 @@ async def address_query_unified(request: Request):
         message = "Kannst du mir deine Adresse nennen? Wenn nicht, drücke bitte die 1."
         say(response, message)
         agent_message(await caller(request), message)
-        
+
         gather = Gather(
             input="speech dtmf",
             language="de-DE",
@@ -275,9 +316,12 @@ async def address_query_unified(request: Request):
             numDigits=1,
         )
         response.append(gather)
-        
-        say(response, "Bitte nenne deine Adresse oder drücke 1 wenn du sie nicht kennst.")
-        
+
+        say(
+            response,
+            "Bitte nenne deine Adresse oder drücke 1 wenn du sie nicht kennst.",
+        )
+
         gather2 = Gather(
             input="speech dtmf",
             language="de-DE",
@@ -299,31 +343,57 @@ async def parse_address_query_unified(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     digits = form_data.get("Digits", "")
     user_message(await caller(request), speech_result or digits)
-    
+
     # If they pressed 1 or said something that indicates they can't name address
-    if digits == "1" or not speech_result.strip():
+    if (
+        digits == "1"
+        or Levenshtein.distance(speech_result.lower(), "eins") <= 3
+        or Levenshtein.distance(speech_result.lower(), "1") <= 2
+        or not speech_result
+    ):
         save_job_info(await caller(request), "Adresse unbekannt", "Ja")
         return await ask_send_sms_unified(request)
-    
+
     location = get_geocode_result(speech_result)
-    
+
     if not location:
-    
-        ai_result, duration = extract_location(speech_result)
-        ai_message(await caller(request), f"<AI location extraction: {ai_result}>", duration)
-            
+
+        try:
+            ai_result, reasoning, duration = await asyncio.wait_for(
+                asyncio.to_thread(extract_location, speech_result), timeout=6.0
+            )
+        except asyncio.TimeoutError:
+            ai_message(await caller(request), "<Request timed out>", 6.0)
+            with new_response() as response:
+                message = "Ich verbinde dich mit einem Mitarbeiter."
+                say(response, message)
+                agent_message(await caller(request), message)
+                start_transfer(response, await caller(request))
+                return send_request(request, response)
+        ai_message(
+            await caller(request), f"<AI location extraction: {ai_result}. Reasoning: {reasoning}>", duration
+        )
+
         # Try to parse the address they named
         location = get_geocode_result(ai_result)
-    
+
     with new_response() as response:
         if location and (location.plz or location.ort):
             # Normalize location data for consistent storage
             location_dict = location._asdict()
             # Convert plz/ort to zipcode/place for compatibility
-            location_dict['zipcode'] = location.plz
-            location_dict['place'] = location.ort
+            location_dict["zipcode"] = location.plz
+            location_dict["place"] = location.ort
             save_location(await caller(request), location_dict)
-            place = " ".join(filter(None, [" ".join(str(location.plz)) if location.plz else None, location.ort])).strip() # Do not change anything here!
+            place = " ".join(
+                filter(
+                    None,
+                    [
+                        " ".join(str(location.plz)) if location.plz else None,
+                        location.ort,
+                    ],
+                )
+            ).strip()  # Do not change anything here!
             google_message(
                 await caller(request),
                 f"Google Maps Ergebnis: {location.formatted_address} ({location.google_maps_link})",
@@ -331,7 +401,7 @@ async def parse_address_query_unified(request: Request):
             message = f"Als Ort habe ich {place} erkannt. Ist das richtig?"
             say(response, message)
             agent_message(await caller(request), message)
-            
+
             gather = Gather(
                 input="speech",
                 language="de-DE",
@@ -342,9 +412,9 @@ async def parse_address_query_unified(request: Request):
                 model="experimental_conversations",
             )
             response.append(gather)
-            
+
             say(response, "Bitte bestätige, ob die Adresse korrekt ist.")
-            
+
             gather2 = Gather(
                 input="speech",
                 language="de-DE",
@@ -369,30 +439,35 @@ async def parse_address_query_unified(request: Request):
 async def ask_plz_unified(request: Request):
     with new_response() as response:
         message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein. Wenn du die Postleitzahl nicht kennst, drücke bitte die 1."
-        say(response, message)
-        agent_message(await caller(request), message)
-        
+
         gather = Gather(
-            input="dtmf",
+            input="dtmf speech",
             action="/parse-plz-unified",
-            timeout=10,
+            timeout=5,
             numDigits=5,
             enhanced=True,
             model="experimental_conversations",
         )
+        say(gather, message)
+        agent_message(await caller(request), message)
+
         response.append(gather)
-        
-        say(response, "Bitte gib die Postleitzahl ein oder drücke 1 wenn du sie nicht kennst.")
-        
+
         gather2 = Gather(
-            input="dtmf",
+            input="dtmf speech",
             action="/parse-plz-unified",
             numDigits=5,
-            timeout=10,
+            timeout=15,
             enhanced=True,
             model="experimental_conversations",
         )
+        say(
+            gather2,
+            "Bitte gib die Postleitzahl ein oder drücke 1 wenn du sie nicht kennst.",
+        )
+
         response.append(gather2)
+
         await fallback_no_response(response, request)
         return send_request(request, response)
 
@@ -400,14 +475,24 @@ async def ask_plz_unified(request: Request):
 @app.api_route("/parse-plz-unified", methods=["GET", "POST"])
 async def parse_plz_unified(request: Request):
     form_data = await request.form()
+
     digits = form_data.get("Digits", "")
-    user_message(await caller(request), digits)
-    
+    speech = form_data.get("SpeechResult", "")
+
+    if digits:
+        result = str(digits)
+    elif speech:
+        result = str(speech).strip()
+    else:
+        result = "1"
+
+    user_message(await caller(request), result)
+
     # Check if user pressed 1 (doesn't know PLZ)
-    if digits == "1":
+    if result.strip() in ("1", "eins", "eine", "ein"):
         save_job_info(await caller(request), "PLZ unbekannt", "Ja")
         return await ask_send_sms_unified(request)
-    
+
     # Otherwise treat as PLZ
     plz = digits
     save_job_info(await caller(request), "PLZ Tastatur", plz)
@@ -416,12 +501,14 @@ async def parse_plz_unified(request: Request):
     with new_response() as response:
         if location:
             save_location(await caller(request), location)
-            link = None
-            if location.get("latitude") is not None and location.get("longitude") is not None:
-                link = f"https://maps.google.com/?q={location['latitude']},{location['longitude']}"
+            link = (
+                f"https://maps.google.com/?q={location['latitude']},{location['longitude']}"
+                if location.get("latitude") and location.get("longitude")
+                else ""
+            )
             summary = f"Standort über PLZ gefunden: {location.get('place', 'Unbekannt')} {location.get('zipcode', '')}".strip()
             if link:
-                summary = f"{summary} ({link})"
+                summary += f" ({link})"
             google_message(await caller(request), summary)
             return await calculate_cost_unified(request)
         else:
@@ -439,13 +526,27 @@ async def parse_plz_unified(request: Request):
 async def parse_location_correct_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
-    correct, duration = yes_no_question(
-        speech_result, "Der Kunde wurde gefragt ob die Adresse korrekt ist."
-    )
-    
+    try:
+        correct, reasoning, duration = await asyncio.wait_for(
+            asyncio.to_thread(
+                yes_no_question,
+                speech_result,
+                "Der Kunde wurde gefragt ob die Adresse korrekt ist.",
+            ),
+            timeout=6.0,
+        )
+    except asyncio.TimeoutError:
+        ai_message(await caller(request), "<Request timed out>", 6.0)
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
+
     user_message(await caller(request), speech_result)
-    ai_message(await caller(request), f"<Address correct: {correct}>", duration)
-    
+    ai_message(await caller(request), f"<Address correct: {correct}. Reasoning: {reasoning}>", duration)
+
     with new_response() as response:
         if correct:
             return await calculate_cost_unified(request)
@@ -457,7 +558,7 @@ async def parse_location_correct_unified(request: Request):
 async def ask_send_sms_unified(request: Request):
 
     # if user is anonymous, skip SMS step
-    if caller(request) == "anonymous":
+    if (await caller(request)) == "anonymous":
         with new_response() as response:
             message = "Ich verbinde dich mit einem Mitarbeiter."
             say(response, message)
@@ -469,7 +570,7 @@ async def ask_send_sms_unified(request: Request):
         message = "Wir können dir eine SMS mit einem Link zusenden, der uns deinen Standort übermittelt. Bist du damit einverstanden?"
         say(response, message)
         agent_message(await caller(request), message)
-        
+
         gather = Gather(
             input="speech",
             language="de-DE",
@@ -480,9 +581,9 @@ async def ask_send_sms_unified(request: Request):
             model="experimental_conversations",
         )
         response.append(gather)
-        
+
         say(response, "Möchtest du eine SMS mit dem Link erhalten?")
-        
+
         gather2 = Gather(
             input="speech",
             language="de-DE",
@@ -502,12 +603,25 @@ async def parse_send_sms_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    send_sms_request, duration = yes_no_question(
-        speech_result,
-        "Der Kunde wurde gefragt ob er eine SMS mit dem Link erhalten möchte.",
-    )
+    try:
+        send_sms_request, reasoning, duration = await asyncio.wait_for(
+            asyncio.to_thread(
+                yes_no_question,
+                speech_result,
+                "Der Kunde wurde gefragt ob er eine SMS mit dem Link erhalten möchte.",
+            ),
+            timeout=6.0,
+        )
+    except asyncio.TimeoutError:
+        ai_message(await caller(request), "<Request timed out>", 6.0)
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
     ai_message(
-        await caller(request), f"<Send SMS request: {send_sms_request}>", duration
+        await caller(request), f"<Send SMS request: {send_sms_request}. Reasoning: {reasoning}>", duration
     )
     if send_sms_request:
         save_job_info(await caller(request), "SMS mit Link angefordert", "Ja")
@@ -537,7 +651,7 @@ async def send_sms_unified(request: Request):
 async def calculate_cost_unified(request: Request):
     intent = get_intent(await caller(request))
     location = get_location(await caller(request))
-    
+
     if intent == "schlüsseldienst":
         try:
             longitude = float(location["longitude"])
@@ -560,7 +674,7 @@ async def calculate_cost_unified(request: Request):
 
     else:  # abschleppdienst
         price, duration, provider, phone = get_price_towing(location)
-    
+
     german_keys = {
         "price": "Preis",
         "duration": "Wartezeit",
@@ -574,7 +688,7 @@ async def calculate_cost_unified(request: Request):
         message = f"Die Kosten betragen {price} Euro und die Wartezeit beträgt {duration} Minuten. Möchtest du jetzt verbunden werden?"
         say(response, message)
         agent_message(await caller(request), message)
-        
+
         gather = Gather(
             input="speech",
             language="de-DE",
@@ -585,9 +699,9 @@ async def calculate_cost_unified(request: Request):
             model="experimental_conversations",
         )
         response.append(gather)
-        
+
         say(response, "Bitte sage ja oder nein.")
-        
+
         gather2 = Gather(
             input="speech",
             language="de-DE",
@@ -607,11 +721,25 @@ async def parse_connection_request_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    connection_request, duration = yes_no_question(
-        speech_result, "Der Kunde wurde gefragt ob er verbunden werden möchte."
-    )
+    try:
+        connection_request, reasoning, duration = await asyncio.wait_for(
+            asyncio.to_thread(
+                yes_no_question,
+                speech_result,
+                "Der Kunde wurde gefragt ob er verbunden werden möchte.",
+            ),
+            timeout=6.0,
+        )
+    except asyncio.TimeoutError:
+        ai_message(await caller(request), "<Request timed out>", 6.0)
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
     ai_message(
-        await caller(request), f"<Connection request: {connection_request}>", duration
+        await caller(request), f"<Connection request: {connection_request}. Reasoning: {reasoning}>", duration
     )
     if connection_request:
         save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")
@@ -648,10 +776,14 @@ async def add_towing_contacts(request: Request):
 async def end_call(request: Request, with_message: bool = True):
     with new_response() as response:
         if with_message:
-            message = "Vielen Dank für deinen Anruf. Wir wünschen dir noch einen schönen Tag."
+            message = (
+                "Vielen Dank für deinen Anruf. Wir wünschen dir noch einen schönen Tag."
+            )
             agent_message(await caller(request), message)
             say(response, message)
-        save_job_info(await caller(request), "hangup_reason", "Agent hat das Gespräch beendet")
+        save_job_info(
+            await caller(request), "hangup_reason", "Agent hat das Gespräch beendet"
+        )
         response.hangup()
         return send_request(request, response)
 
@@ -665,7 +797,9 @@ async def status(request: Request):
         save_job_info(await caller(request), "Live", "Nein")
 
         if not get_job_info(await caller(request), "hangup_reason"):
-            save_job_info(await caller(request), "hangup_reason", "Anruf durch Kunde beendet")
+            save_job_info(
+                await caller(request), "hangup_reason", "Anruf durch Kunde beendet"
+            )
 
     return JSONResponse(content={"status": "ok"})
 
@@ -690,7 +824,11 @@ async def parse_transfer_call(request: Request, name: str):
                 message = "Leider sind alle unsere Mitarbeiter im Gespräch. Bitte rufe später erneut an."
                 agent_message(await caller(request), message)
                 say(response, message)
-                save_job_info(await caller(request), "hangup_reason", "Agent hat das Gespräch beendet")
+                save_job_info(
+                    await caller(request),
+                    "hangup_reason",
+                    "Agent hat das Gespräch beendet",
+                )
                 response.hangup()
 
             return send_request(request, response)
@@ -709,5 +847,7 @@ async def parse_transfer_call(request: Request, name: str):
 
     with new_response() as response:
         response.hangup()
-        save_job_info(await caller(request), "hangup_reason", "Erfolgreich weitergeleitet")
+        save_job_info(
+            await caller(request), "hangup_reason", "Erfolgreich weitergeleitet"
+        )
         return send_request(request, response)

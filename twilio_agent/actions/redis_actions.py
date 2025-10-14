@@ -5,9 +5,9 @@ import logging
 import os
 import zoneinfo
 
+import dotenv
 import yaml
 from redis import Redis
-import dotenv
 
 dotenv.load_dotenv()
 
@@ -30,11 +30,17 @@ def _normalize_recording_type(recording_type: str | None) -> str:
     candidate = str(recording_type).strip().lower()
     if candidate in VALID_RECORDING_TYPES:
         return candidate
-    logger.warning("Unknown recording_type '%s'; falling back to '%s'", recording_type, DEFAULT_RECORDING_TYPE)
+    logger.warning(
+        "Unknown recording_type '%s'; falling back to '%s'",
+        recording_type,
+        DEFAULT_RECORDING_TYPE,
+    )
     return DEFAULT_RECORDING_TYPE
 
 
-def _recording_key(number_without_plus: str, timestamp: str, recording_type: str) -> str:
+def _recording_key(
+    number_without_plus: str, timestamp: str, recording_type: str
+) -> str:
     return f"verlauf:{number_without_plus}:{timestamp}:recording:{recording_type}"
 
 
@@ -283,7 +289,7 @@ def get_call_recording(number: str, timestamp: str, recording_type: str | None =
         return None
 
     normalized_type = _normalize_recording_type(recording_type)
-    number = number.replace('+', '00')
+    number = number.replace("+", "00")
 
     redis_key = _recording_key(number, timestamp, normalized_type)
     recording_data = redis.get(redis_key)
@@ -302,7 +308,9 @@ def get_call_recording(number: str, timestamp: str, recording_type: str | None =
         return None
 
 
-def get_call_recording_binary(number: str, timestamp: str, recording_type: str | None = None):
+def get_call_recording_binary(
+    number: str, timestamp: str, recording_type: str | None = None
+):
     """Return decoded audio bytes and content type for a stored recording."""
     payload = get_call_recording(number, timestamp, recording_type)
     if not payload:

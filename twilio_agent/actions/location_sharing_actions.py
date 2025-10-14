@@ -144,7 +144,7 @@ def receive_location(link_id: str, location_data: LocationData):
             int(timedelta(days=7).total_seconds()),
             json.dumps(location_record),
         )
-        
+
         link_data["used"] = True
         link_data["used_at"] = datetime.now().isoformat()
         link_data["status"] = "used"

@@ -6,6 +6,7 @@ import dotenv
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client
 
 from twilio_agent.actions.redis_actions import (
@@ -13,7 +14,6 @@ from twilio_agent.actions.redis_actions import (
     get_call_timestamp,
     save_call_recording,
 )
-
 
 dotenv.load_dotenv()
 
@@ -29,14 +29,26 @@ logger = logging.getLogger("uvicorn")
 
 
 async def start_recording(call_sid: str, caller: str):
-    await asyncio.sleep(2)
-
-    recording = client.calls(call_sid).recordings.create(
-        recording_status_callback=server_url
-        + f"/recording-status-callback/{caller.replace('+', '00')}?source=initial",
-        recording_status_callback_event="completed",
-    )
-    logger.info(f"Started recording for call {call_sid}: {recording.sid}")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            await asyncio.sleep(2)
+            recording = client.calls(call_sid).recordings.create(
+                recording_status_callback=server_url
+                + f"/recording-status-callback/{caller.replace('+', '00')}?source=initial",
+                recording_status_callback_event="completed",
+            )
+            logger.info(f"Started recording for call {call_sid}: {recording.sid}")
+            break  # Success, exit loop
+        except TwilioRestException as e:
+            if attempt == max_retries - 1:
+                logger.error(
+                    f"Failed to start recording after {max_retries} attempts: {e}"
+                )
+                raise  # Re-raise after last attempt
+            else:
+                logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying...")
+                await asyncio.sleep(1)  # Optional delay between retries
 
 
 @router.api_route("/recording-status-callback/{caller}", methods=["GET", "POST"])
@@ -50,7 +62,9 @@ async def recording_status_callback(request: Request, caller: str):
     recording_sid = form_data.get("RecordingSid")
     segment_duration = form_data.get("RecordingDuration")
     try:
-        segment_duration = int(segment_duration) if segment_duration is not None else None
+        segment_duration = (
+            int(segment_duration) if segment_duration is not None else None
+        )
     except Exception:
         segment_duration = None
     if recording_url and form_data.get("RecordingStatus") == "completed":
@@ -120,7 +134,9 @@ async def recording_status_callback(request: Request, caller: str):
 
 
 def _build_recording_response(number: str, timestamp: str, recording_type: str):
-    audio_bytes, content_type = get_call_recording_binary(number, timestamp, recording_type)
+    audio_bytes, content_type = get_call_recording_binary(
+        number, timestamp, recording_type
+    )
     if not audio_bytes:
         raise HTTPException(status_code=404, detail="Recording not found")
     return Response(content=audio_bytes, media_type=content_type)

@@ -18,7 +18,13 @@ async def send_telegram_notification(caller_number: str) -> str:
         formatted_number = caller_number.replace("+", "00")
         server_url = os.getenv("SERVER_URL", "https://localhost:8000")
         live_ui_url = f"{server_url}/details/{formatted_number}/{timestamp}"
-        await send_message(live_ui_url, caller_number, os.getenv("TELEGRAM_CHAT_ID")) if not "17657888" in caller_number else None
+        (
+            await send_message(
+                live_ui_url, caller_number, os.getenv("TELEGRAM_CHAT_ID")
+            )
+            if not "17657888" in caller_number
+            else None
+        )
         await send_message(live_ui_url, caller_number, "6919860852")
         return live_ui_url
 

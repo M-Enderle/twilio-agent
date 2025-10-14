@@ -611,11 +611,12 @@
         
         for (const [key, value] of Object.entries(info)) {
           // Skip individual PLZ and Ort fields since they're combined in Standort
-          if (value != null && value !== '' && key !== 'call_number' && key !== 'PLZ' && key !== 'Ort' && key !== "hangup_reason") {
+          const excludeKeys = ['call_number', 'PLZ', 'Ort', 'hangup_reason', 'Live', 'Anbieter'];
+            if (value != null && value !== '' && !excludeKeys.includes(key) && !key.toLowerCase().startsWith('audio')) {
             const p = document.createElement('p');
             p.innerHTML = `<strong>${key}:</strong> ${formatValue(key, value)}`;
             callInfoDiv.appendChild(p);
-          }
+            }
         }
       }
     }
@@ -748,24 +749,15 @@
 
       
       if (key === 'Standort' && value) {
+        console.log('Formatting Standort:', value);
         // Handle object location data
         if (typeof value === 'object' && value !== null) {
-          const plz = value.plz || value.zipcode || '';
-          const ort = value.ort || value.city || value.place || '';
-          const strasse = value.strasse || value.street || '';
-          const hausnummer = value.hausnummer || value.house_number || '';
+          const address = value.formatted_address;
           
-          let address = '';
-          if (strasse && hausnummer) {
-            address += `${strasse} ${hausnummer}, `;
-          }
-          if (plz && ort) {
-            address += `${plz} ${ort}`;
-          } else if (ort) {
-            address += ort;
-          } else if (plz) {
-            address += plz;
-          }
+          return address ? linkifyText(address) : 'Nicht verfügbar';
+        }
+        if (typeof value === 'object' && value !== null) {
+          const address = value.formatted_address;
           
           return address ? linkifyText(address) : 'Nicht verfügbar';
         }

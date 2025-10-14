@@ -9,19 +9,21 @@ import dotenv
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from twilio.rest import Client
-from twilio.twiml.voice_response import (Connect, Dial, Gather, Number,
-                                         VoiceResponse)
+from twilio.twiml.voice_response import Connect, Dial, Gather, Number, VoiceResponse
 
-from twilio_agent.actions.redis_actions import (agent_message, get_intent,
-                                                get_job_info,
-                                                get_next_caller_in_queue,
-                                                get_shared_location,
-                                                delete_job_info,
-                                                save_job_info, google_message,
-                                                get_location)
+from twilio_agent.actions.redis_actions import (
+    agent_message,
+    delete_job_info,
+    get_intent,
+    get_job_info,
+    get_location,
+    get_next_caller_in_queue,
+    get_shared_location,
+    google_message,
+    save_job_info,
+)
 from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.pricing import (get_price_locksmith,
-                                        get_price_towing_coordinates)
+from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing_coordinates
 
 contact_manager = ContactManager()
 
@@ -74,8 +76,7 @@ def say(obj, text: str):
 
 def send_sms_with_link(to: str):
     # Create location sharing link with caller parameter
-    from twilio_agent.actions.location_sharing_actions import \
-        generate_location_link
+    from twilio_agent.actions.location_sharing_actions import generate_location_link
 
     location_link = generate_location_link(phone_number=to)["link_url"]
 
@@ -88,7 +89,7 @@ Bitte teile uns deinen Standort mit, indem du auf den folgenden Link klickst: {l
         from_=twilio_phone_number,
         to=to,
     )
-    
+
     logger.info(f"SMS with link sent to {to}")
 
 
@@ -144,7 +145,12 @@ def outbound_call_after_sms(to: str):
         "provider": provider,
         "phone": phone,
     }
-    for key, german in {"price": "Preis", "duration": "Wartezeit", "provider": "Anbieter", "phone": "Telefon"}.items():
+    for key, german in {
+        "price": "Preis",
+        "duration": "Wartezeit",
+        "provider": "Anbieter",
+        "phone": "Telefon",
+    }.items():
         value = service_values[key]
         if not value:
             logger.error("Missing %s for %s", key, service_name)
@@ -236,7 +242,17 @@ def start_transfer(response: VoiceResponse, caller: str) -> str:
     next_caller = get_next_caller_in_queue(caller)
     if not next_caller:
         return "no_more_agents"
-    tr = Dial(action=f"{server_url}/parse-transfer-call/{next_caller}", timeout=10, callerId="+491604996655")
+
+    if get_job_info(caller, "Erfolgreich weitergeleitet") == "Nein":
+        timeout = 10
+    else:
+        timeout = 17
+
+    tr = Dial(
+        action=f"{server_url}/parse-transfer-call/{next_caller}",
+        timeout=timeout,
+        callerId="+491604996655",
+    )
     phone_number = contact_manager.get_phone(next_caller)
     tr.append(Number(phone_number))
     response.append(tr)

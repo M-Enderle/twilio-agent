@@ -34,7 +34,9 @@ def _fetch_first_result(params: dict) -> Optional[dict]:
         return None
 
     if data.get("status") != "OK":
-        print(f"API error: {data.get('status')} - {data.get('error_message', 'No error message')}")
+        print(
+            f"API error: {data.get('status')} - {data.get('error_message', 'No error message')}"
+        )
         return None
 
     results = data.get("results") or []
@@ -54,12 +56,18 @@ def _extract_plz_ort(result: dict) -> tuple[Optional[str], Optional[str]]:
 
         if not postal and "postal_code" in types and name:
             postal = name.replace(" ", "")
-        if not city and any(t in types for t in ("locality", "postal_town", "administrative_area_level_3")):
+        if not city and any(
+            t in types
+            for t in ("locality", "postal_town", "administrative_area_level_3")
+        ):
             city = name
 
     if not city:
         for component in result.get("address_components", []):
-            if any(t in component.get("types", []) for t in ("administrative_area_level_2", "administrative_area_level_1")):
+            if any(
+                t in component.get("types", [])
+                for t in ("administrative_area_level_2", "administrative_area_level_1")
+            ):
                 city = component.get("long_name")
                 break
 
@@ -70,14 +78,18 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
     if not API_KEY:
         raise ValueError("MAPS_API_KEY environment variable is not set")
 
-    forward = _fetch_first_result({"address": address, "key": API_KEY, "region": "de", "language": "de"})
+    forward = _fetch_first_result(
+        {"address": address, "key": API_KEY, "region": "de", "language": "de"}
+    )
     if not forward:
         return None
 
     location = forward["geometry"]["location"]
     latitude, longitude = location["lat"], location["lng"]
 
-    reverse = _fetch_first_result({"latlng": f"{latitude},{longitude}", "key": API_KEY, "language": "de"})
+    reverse = _fetch_first_result(
+        {"latlng": f"{latitude},{longitude}", "key": API_KEY, "language": "de"}
+    )
     result = reverse or forward
     plz, ort = _extract_plz_ort(result)
 
@@ -107,10 +119,16 @@ def check_location(zipcode: str, city: Optional[str]) -> Optional[dict]:
     if not zipcode:
         return None
 
-    entries = [entry for entry in _load_zipcode_entries() if entry.get("zipcode", "").startswith(zipcode)]
+    entries = [
+        entry
+        for entry in _load_zipcode_entries()
+        if entry.get("zipcode", "").startswith(zipcode)
+    ]
     if city:
         city_lower = city.lower()
-        city_matches = [entry for entry in entries if entry.get("place", "").lower() == city_lower]
+        city_matches = [
+            entry for entry in entries if entry.get("place", "").lower() == city_lower
+        ]
         if city_matches:
             entries = city_matches
 
@@ -126,3 +144,15 @@ def check_location(zipcode: str, city: Optional[str]) -> Optional[dict]:
         "latitude": float(latitude) if latitude else None,
         "longitude": float(longitude) if longitude else None,
     }
+
+
+if __name__ == "__main__":
+    test_addresses = [
+        "Brandenburger Tor, Berlin",
+        "Marienplatz, München",
+        "Stephansdom, Wien",
+        "Invalid Address 12345",
+    ]
+    for addr in test_addresses:
+        result = get_geocode_result(addr)
+        print(f"Address: {addr}\nResult: {result}\n")
