@@ -104,6 +104,9 @@ async def incoming_call(request: Request):
     # Send Telegram notification with live UI link
     live_url = await send_telegram_notification(caller_number)
     logger.info(f"Telegram live UI URL: {live_url}")
+    
+    if "17657888" in caller_number:
+        return await greeting(request)
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
     intent = get_intent(caller_number)
