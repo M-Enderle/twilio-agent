@@ -104,7 +104,7 @@ async def incoming_call(request: Request):
     # Send Telegram notification with live UI link
     live_url = await send_telegram_notification(caller_number)
     logger.info(f"Telegram live UI URL: {live_url}")
-    
+
     if "17657888" in caller_number:
         return await greeting(request)
 
@@ -146,7 +146,9 @@ async def incoming_call(request: Request):
                     return send_request(request, response)
                 case _:
                     if caller_number != "anonymous":
-                        asyncio.create_task(start_recording(form_data.get("CallSid"), caller_number))
+                        asyncio.create_task(
+                            start_recording(form_data.get("CallSid"), caller_number)
+                        )
                     return await greeting(request)
 
 
@@ -204,7 +206,9 @@ async def parse_intent_1(request: Request):
             start_transfer(response, await caller(request))
             return send_request(request, response)
     ai_message(
-        await caller(request), f"<Request classified as {classification}. Reasoning: {reasoning}>", duration
+        await caller(request),
+        f"<Request classified as {classification}. Reasoning: {reasoning}>",
+        duration,
     )
     match classification:
         case "schlüsseldienst":
@@ -277,7 +281,9 @@ async def parse_intent_2(request: Request):
             start_transfer(response, await caller(request))
             return send_request(request, response)
     ai_message(
-        await caller(request), f"<Request classified as {classification}. Reasoning: {reasoning}>", duration
+        await caller(request),
+        f"<Request classified as {classification}. Reasoning: {reasoning}>",
+        duration,
     )
     match classification:
         case "schlüsseldienst":
@@ -373,7 +379,9 @@ async def parse_address_query_unified(request: Request):
                 start_transfer(response, await caller(request))
                 return send_request(request, response)
         ai_message(
-            await caller(request), f"<AI location extraction: {ai_result}. Reasoning: {reasoning}>", duration
+            await caller(request),
+            f"<AI location extraction: {ai_result}. Reasoning: {reasoning}>",
+            duration,
         )
 
         # Try to parse the address they named
@@ -547,7 +555,11 @@ async def parse_location_correct_unified(request: Request):
             return send_request(request, response)
 
     user_message(await caller(request), speech_result)
-    ai_message(await caller(request), f"<Address correct: {correct}. Reasoning: {reasoning}>", duration)
+    ai_message(
+        await caller(request),
+        f"<Address correct: {correct}. Reasoning: {reasoning}>",
+        duration,
+    )
 
     with new_response() as response:
         if correct:
@@ -623,7 +635,9 @@ async def parse_send_sms_unified(request: Request):
             start_transfer(response, await caller(request))
             return send_request(request, response)
     ai_message(
-        await caller(request), f"<Send SMS request: {send_sms_request}. Reasoning: {reasoning}>", duration
+        await caller(request),
+        f"<Send SMS request: {send_sms_request}. Reasoning: {reasoning}>",
+        duration,
     )
     if send_sms_request:
         save_job_info(await caller(request), "SMS mit Link angefordert", "Ja")
@@ -741,7 +755,9 @@ async def parse_connection_request_unified(request: Request):
             start_transfer(response, await caller(request))
             return send_request(request, response)
     ai_message(
-        await caller(request), f"<Connection request: {connection_request}. Reasoning: {reasoning}>", duration
+        await caller(request),
+        f"<Connection request: {connection_request}. Reasoning: {reasoning}>",
+        duration,
     )
     if connection_request:
         save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")

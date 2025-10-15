@@ -47,10 +47,10 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
         system_prompt = f"""
     Du klassifizierst exakt in eine dieser Klassen: '{choices_str}'. Gib die Klassifizierung und eine kurze Begründung auf Deutsch aus.
 
-    FORMAT: <Begründung>: <Klassenname>
+    FORMAT: <Begründung> -> <Klasse>
 
     Wähle EINE der folgenden Klassen: {choices_str} 
-    Gebe die klasse und begründung ohne < und > aus. 
+    Gebe die klasse und begründung ohne < und > aus. Nutze immmer ->.
 
     Begründung kurz auf Deutsch. Nenne wenn möglich die Regel. max 10 wörter.
 
@@ -79,12 +79,17 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
     1. Wenn sowohl Schlüssel- als-auch Auto-Kontext: Entscheide immer für schlüsseldienst.
     2. Enthält klaren Wunsch nach Mensch (sprechen, verbinden) überschreibt andere Hinweise => mitarbeiter.
     3. Sonst fallback '{fallback}'.
+
+    Beispiele
+    - "Ich habe meinen Autoschlüssel verloren" => "Schlüssel verloren, Auto betroffen. -> schlüsseldienst"
+    - "Mein Auto springt nicht an" => "Auto startet nicht. -> abschleppdienst"
+
     """
         user_prompt = f'Kategorisiere diese Anfrage: "{spoken_text}"'
 
         response = _ask_grok(system_prompt, user_prompt).strip()
-        if ":" in response:
-            reasoning, classification = response.split(":", 1)
+        if "->" in response:
+            reasoning, classification = response.split("->", 1)
             classification = classification.strip().lower()
             reasoning = reasoning.strip()
         else:
@@ -116,29 +121,31 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
 
     try:
         system_prompt = """
-Du entscheidest: zeigt die Antwort eine Zustimmung? Gib "Ja" oder "Nein" und eine kurze Begründung auf Deutsch aus.
+    Entscheide, ob die Antwort Zustimmung zeigt. Gib eine kurze Begründung (max 10 Wörter) und "Ja" oder "Nein" auf Deutsch aus.
 
-FORMAT: <Begründung>: <Ja/Nein>
-Gebe die antwort und begründung ohne < und > aus. Die Begründung soll kurz sein (max 10 Wörter).
+    Format: <Begründung> -> <Ja/Nein>
+    Immer -> verwenden. Ohne < >.
 
-JA falls klare oder schwache Zustimmung / Bestätigung, inkl.:
-- Varianten & Umgangssprache: ja, jup, jo, genau / geh nau / ge nau, absolut, stimmt, stimmt so, passt, in ordnung, alles klar, na gut, na ja (ohne klaren Widerspruch), bin sicher, machen wir so.
-- Eingeleitete Zustimmung mit Nachsatz: "Stimmt, aber..." => Ja.
-- Verballhornte ASR-Fehler: schwimmt / das schwimmt (für "stimmt") => Ja, Jagd (für "ja") wenn Kontext zustimmend.
+    Ja bei Zustimmung/Bestätigung, inkl.:
+    - Varianten: ja, jup, jo, genau, absolut, stimmt, passt, in Ordnung, alles klar, na gut, na ja (ohne Widerspruch), bin sicher, machen wir so.
+    - Mit Nachsatz: "Stimmt, aber..." -> Ja.
+    - ASR-Fehler: schwimmt (für stimmt), Jagd (für ja) bei zustimmendem Kontext.
 
-NEIN falls:
-- Explizite Negation: nein, keineswegs, ganz und gar nicht.
-- Bitte um Wiederholung / Unklarheit: "bitte wiederholen", "weiß nicht", "egal".
-- Verneinende Konstruktionen: "stimmt nicht", "nicht richtig".
-- Frage zurück ohne Zustimmung.
+    Nein bei:
+    - Negation: nein, keineswegs, ganz und gar nicht.
+    - Unklarheit: bitte wiederholen, weiß nicht, egal.
+    - Verneinung: stimmt nicht, nicht richtig.
+    - Frage zurück ohne Zustimmung.
 
-Ambig ohne positives Signal => Nein. Sonst Ja.
-"""
+    Beispiele:
+    - "ja gerne" => "Klar ja. -> Ja"
+    - "nein danke" => "Klar nein. -> Nein"
+    """
         user_prompt = f'Kontext: "{context}" \nAntwort des Benutzers: "{spoken_text}". Zeigt dies eine bejahende Absicht?'
 
         response = _ask_grok(system_prompt, user_prompt).strip()
-        if ":" in response:
-            reasoning, decision = response.split(":", 1)
+        if "->" in response:
+            reasoning, decision = response.split("->", 1)
             decision = decision.strip()
             reasoning = reasoning.strip()
         else:
@@ -168,44 +175,95 @@ def extract_location(spoken_text: str) -> tuple[str, str, float]:
 
     try:
         system_prompt = """
-Extrahiere NUR den Adressteil aus dem gesprochenen Text. Gib die Adresse und eine kurze Begründung auf Deutsch aus.
+    Extrahiere NUR den Adressteil aus dem gesprochenen Text. Gib die Adresse und eine kurze Begründung auf Deutsch aus.
 
-FORMAT: <Begründung>: <Adresse>
-Gebe die antwort und begründung ohne < und > aus. Die Begründung soll kurz sein (max 10 Wörter).
+    Gebe nur die Adresse zurück, ohne zusätzliche Erklärungen.
 
-REGELN:
-- Behalte: Straßenname, Hausnummer, PLZ, Ortsname
-- Entferne: Füllwörter, Fragen, Zeitangaben, persönliche Kommentare
-- Format: "Straße Hausnummer in PLZ Ort" oder verfügbare Teile davon
-- Falls keine Adresse erkennbar: "Keine Adresse"
+    REGELN:
+    - Behalte: Straßenname, Hausnummer, PLZ, Ortsname
+    - Entferne: Füllwörter, Fragen, Zeitangaben, persönliche Kommentare
+    - Format: "Straße Hausnummer in PLZ Ort" oder verfügbare Teile davon
+    - Falls keine Adresse erkennbar: "Keine Adresse"
 
-BEISPIELE:
-"Ich wohne in der Güterstraße 12 in 94469 Deggendorf, wann kommst du?" -> "Güterstraße 12 in 94469 Deggendorf: Adresse aus Wohnort-Erwähnung extrahiert."
-"Meine Adresse ist Hauptstraße 5, 80331 München" -> "Hauptstraße 5, 80331 München: Direkte Adressangabe."
-"Kannst du zu mir kommen? Ich bin krank." -> "Keine Adresse: Keine Adressinformationen vorhanden."
-"7 9 5 9 2" -> "79592: Nur PLZ erkannt."
-"Osterhofen" -> "Osterhofen: Nur Ortsname."
-"Ich bin auf der a3 bei Plattling" -> "Plattling: Ort aus Verkehrshinweis."
-"Ich bin in der Stadtgasse 10 in München" -> "Stadtgasse 10 in München: Vollständige Adresse."
-"""
+    BEISPIELE:
+    "Ich wohne in der Güterstraße 12 in 94469 Deggendorf." => "Güterstraße 12 in 94469 Deggendorf"
+    "Meine Adresse ist Hauptstraße 5, 80331 München." => "Hauptstraße 5, 80331 München"
+    "Kannst du zu mir kommen? Ich bin krank." => "Keine Adresse"
+    "7 9 5 9 2" => "79592"
+    "Osterhofen" => "Osterhofen"
+    "Ich bin auf der A96 bei Plattling." => "A96 bei Plattling"
+    """
         user_prompt = f'Text: "{spoken_text}"'
 
         response = _ask_grok(system_prompt, user_prompt).strip()
-        if ":" in response:
-            reasoning, address = response.split(":", 1)
-            address = address.strip()
-            reasoning = reasoning.strip()
-        else:
-            address = response
-            reasoning = "Keine Begründung gegeben."
-
-        duration = time.time() - start_time
-        logger.info(
-            f"Location extraction completed in {duration:.3f}s. Result: {address}"
-        )
-        return address.strip(), reasoning, duration
-
+        address = response if response and response != "Keine Adresse" else None
+        return address, "Extraktion abgeschlossen.", time.time() - start_time
     except Exception as e:
         duration = time.time() - start_time
-        logger.error(f"Error extracting location after {duration:.3f}s: {e}")
-        return "Keine Adresse", f"Fehler: {e}", duration
+        logger.error(f"Error in extract_location after {duration:.3f}s: {e}")
+        return None, f"Fehler: {e}", duration
+
+
+if __name__ == "__main__":
+    # Test cases for classify_intent
+    test_cases_classify = [
+        "Mein Auto springt nicht an.",
+        "Ich habe meinen Schlüssel verloren.",
+        "Ich brauche Hilfe vom ADAC.",
+        "Kann ich mit einem Mitarbeiter sprechen?",
+        "Ich möchte meine Mitgliedschaft kündigen.",
+        "Mein Schlüssel steckt im Auto.",
+        "Mein Reifen ist kaputt.",
+        "Ich bin eingeschlossen in meinem Haus.",
+        "Ich brauche Hilfe mit meinem Fahrzeug.",
+        "Ich möchte einen Termin vereinbaren.",
+    ]
+
+    print("Testing classify_intent:")
+    for i, text in enumerate(test_cases_classify, 1):
+        result, reasoning, duration = classify_intent(text)
+        print(
+            f"Case {i}: '{text}' -> {result} (Reason: {reasoning}, Time: {duration:.3f}s)"
+        )
+
+    # Test cases for yes_no_question
+    test_cases_yes_no = [
+        ("Ja, gerne.", "Möchten Sie Hilfe?"),
+        ("Nein, danke.", "Ist das korrekt?"),
+        ("Genau.", "Bestätigen Sie?"),
+        ("Ich weiß nicht.", "Sind Sie sicher?"),
+        ("Stimmt.", "Passt das?"),
+        ("Nicht richtig.", "Ist das so?"),
+        ("Alles klar.", "Einverstanden?"),
+        ("Bitte wiederholen.", "Verstehen Sie?"),
+        ("Na gut.", "Okay?"),
+        ("Ganz und gar nicht.", "Richtig?"),
+    ]
+
+    print("\nTesting yes_no_question:")
+    for i, (text, context) in enumerate(test_cases_yes_no, 1):
+        is_agreement, reasoning, duration = yes_no_question(text, context)
+        print(
+            f"Case {i}: '{text}' in '{context}' -> {is_agreement} (Reason: {reasoning}, Time: {duration:.3f}s)"
+        )
+
+    # Test cases for extract_location
+    test_cases_extract = [
+        "Ich wohne in der Güterstraße 12 in 94469 Deggendorf.",
+        "Meine Adresse ist Hauptstraße 5, 80331 München.",
+        "Kannst du zu mir kommen? Ich bin krank.",
+        "7 9 5 9 2",
+        "Osterhofen",
+        "Ich bin auf der A3 bei Plattling.",
+        "Ich bin in der Stadtgasse 10 in München.",
+        "Adresse: Berliner Straße 42, 10117 Berlin.",
+        "Keine Adresse hier.",
+        "In der Nähe von Passau, Straße unbekannt.",
+    ]
+
+    print("\nTesting extract_location:")
+    for i, text in enumerate(test_cases_extract, 1):
+        address, reasoning, duration = extract_location(text)
+        print(
+            f"Case {i}: '{text}' -> '{address}' (Reason: {reasoning}, Time: {duration:.3f}s)"
+        )
