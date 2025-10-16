@@ -453,10 +453,11 @@ async def ask_plz_unified(request: Request):
         gather = Gather(
             input="dtmf speech",
             action="/parse-plz-unified",
-            timeout=5,
+            timeout=10,
             numDigits=5,
             enhanced=True,
-            model="experimental_conversations",
+            model="experimental_utterances",
+            language="de-DE",
         )
         say(gather, message)
         agent_message(await caller(request), message)
@@ -469,7 +470,8 @@ async def ask_plz_unified(request: Request):
             numDigits=5,
             timeout=15,
             enhanced=True,
-            model="experimental_conversations",
+            model="experimental_utterances",
+            language="de-DE",
         )
         say(
             gather2,
@@ -493,7 +495,7 @@ async def parse_plz_unified(request: Request):
         result = str(digits)
         logger.info(f"Digits: {result}")
     elif speech:
-        result = str(speech).strip()
+        result = str(speech).strip().replace(" ", "").replace(",", "").replace(".", "")
         logger.info(f"Speech: {result}")
     else:
         result = "1"
@@ -506,7 +508,7 @@ async def parse_plz_unified(request: Request):
         return await ask_send_sms_unified(request)
 
     # Otherwise treat as PLZ
-    plz = digits
+    plz = result
     save_job_info(await caller(request), "PLZ Tastatur", plz)
     location = check_location(plz, None)
 

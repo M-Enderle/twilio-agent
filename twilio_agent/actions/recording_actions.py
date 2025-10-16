@@ -45,7 +45,6 @@ async def start_recording(call_sid: str, caller: str):
                 logger.error(
                     f"Failed to start recording after {max_retries} attempts: {e}"
                 )
-                raise  # Re-raise after last attempt
             else:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying...")
                 await asyncio.sleep(1)  # Optional delay between retries
