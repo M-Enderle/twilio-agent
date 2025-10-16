@@ -80,9 +80,8 @@ def send_sms_with_link(to: str):
 
     location_link = generate_location_link(phone_number=to)["link_url"]
 
-    message_body = f"""Hallo, hier ist die Notdienststation. 🚗⚠️
-    
-Bitte teile uns deinen Standort mit, indem du auf den folgenden Link klickst: {location_link} 📍"""
+    message_body = f"""Hier ist die Notdienststation.
+Teile deinen Standort mit diesem Link: {location_link}"""
 
     client.messages.create(
         body=message_body,
@@ -225,10 +224,10 @@ def send_job_details_sms(caller: str, transferred_to: str):
         location = {}
 
     message_body = f"""Anrufdetails:
-📞 Anrufer: {caller}
-📍 Erkannter Ort: {location.get('zipcode', '')} {location.get('place', '')}
-💰 Genannter Preis: {get_job_info(caller, 'Preis')} Euro
-⏰ Genannte Wartezeit: {get_job_info(caller, 'Wartezeit')} Minuten"""
+Anrufer: {caller}
+Ort: {location.get('google_maps_link', 'Unbekannt')}
+Preis: {get_job_info(caller, 'Preis')} Euro
+Wartezeit: {get_job_info(caller, 'Wartezeit')} min"""
 
     client.messages.create(
         body=message_body,

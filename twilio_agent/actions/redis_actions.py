@@ -77,9 +77,9 @@ def init_new_call(call_number: str):
     save_job_info(call_number, "Live", "Ja")
 
 
-def get_intent(call_number: str) -> str:
+def get_intent(call_number: str, return_anonymou: bool = False) -> str:
     try:
-        if call_number == "anonymous":
+        if call_number == "anonymous" and not return_anonymou:
             return None
         return redis.get(f"anrufe:{call_number}:anliegen").decode("utf-8")
     except Exception as e:

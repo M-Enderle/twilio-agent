@@ -302,7 +302,7 @@ async def parse_intent_2(request: Request):
 
 
 async def address_query_unified(request: Request):
-    intent = get_intent(await caller(request))
+    intent = get_intent(await caller(request), True)
     if intent == "abschleppdienst":
         await add_towing_contacts(request)
     elif intent == "schlüsseldienst":
@@ -669,7 +669,7 @@ async def send_sms_unified(request: Request):
 
 
 async def calculate_cost_unified(request: Request):
-    intent = get_intent(await caller(request))
+    intent = get_intent(await caller(request), True)
     location = get_location(await caller(request))
 
     if intent == "schlüsseldienst":
