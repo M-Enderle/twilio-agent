@@ -70,6 +70,7 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
        4.1 Wunsch nach Mensch / Mitarbeiter / Arbeiter / Agent / realer Person / durchstellen / verbinden / sprechen mit jemand / menschlicher Ansprechpartner.
        4.2 Auch verschrieben (mit Arbeiter, Arbeiter).
        4.3 Aussagen wie "Kann ich mit jemandem über mein Auto reden?" => mitarbeiter.
+       4.4 Privates Anliegen => mitarbeiter.
     5. andere:
        5.1 Alles Administrative (Kündigung, Kostenfrage).
        5.2 Unklare generische Hilfe ("Brauche Hilfe").
