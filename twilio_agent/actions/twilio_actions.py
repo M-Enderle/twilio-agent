@@ -20,6 +20,7 @@ from twilio_agent.actions.redis_actions import (
     get_next_caller_in_queue,
     get_shared_location,
     google_message,
+    save_location,
     save_job_info,
 )
 from twilio_agent.utils.contacts import ContactManager
@@ -112,9 +113,15 @@ def outbound_call_after_sms(to: str):
         return
 
     maps_link = f"https://maps.google.com/?q={latitude},{longitude}"
-    save_job_info(to, "Latitude", latitude)
-    save_job_info(to, "Longitude", longitude)
-    save_job_info(to, "Google Maps Link", maps_link)
+    # Save Standort in the same structure used by Google Maps flow
+    save_location(
+        to,
+        {
+            "latitude": latitude_float,
+            "longitude": longitude_float,
+            "google_maps_link": maps_link,
+        },
+    )
     delete_job_info(to, "waiting_for_sms")
     delete_job_info(to, "hangup_reason")
     google_message(to, f"Live-Standort über SMS bestätigt: {maps_link}")
@@ -225,9 +232,10 @@ def send_job_details_sms(caller: str, transferred_to: str):
 
     message_body = f"""Anrufdetails:
 Anrufer: {caller}
-Ort: {location.get('google_maps_link', 'Unbekannt')}
+Adresse: {location.get('formatted_address', 'Unbekannt')}
 Preis: {get_job_info(caller, 'Preis')} Euro
-Wartezeit: {get_job_info(caller, 'Wartezeit')} min"""
+Wartezeit: {get_job_info(caller, 'Wartezeit')} min
+{location.get('google_maps_link', 'Unbekannt')}"""
 
     client.messages.create(
         body=message_body,
