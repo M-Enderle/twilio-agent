@@ -14,7 +14,6 @@ from twilio_agent.actions.redis_actions import (
     add_to_caller_queue,
     agent_message,
     ai_message,
-    cleanup_call,
     clear_caller_queue,
     delete_next_caller,
     get_intent,
@@ -44,7 +43,7 @@ from twilio_agent.actions.twilio_actions import (
 from twilio_agent.ui import router as ui_router
 from twilio_agent.utils.ai import classify_intent, extract_location, yes_no_question
 from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.location_utils import check_location, get_geocode_result
+from twilio_agent.utils.location_utils import  get_geocode_result
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
 
 dotenv.load_dotenv()
@@ -510,7 +509,7 @@ async def parse_plz_unified(request: Request):
     # Otherwise treat as PLZ
     plz = result
     save_job_info(await caller(request), "PLZ Tastatur", plz)
-    location = check_location(plz, None)
+    location = get_geocode_result(plz, None)
 
     with new_response() as response:
         if location:

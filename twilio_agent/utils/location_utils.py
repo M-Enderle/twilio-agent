@@ -102,50 +102,6 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
         ort=ort,
     )
 
-
-@lru_cache()
-def _load_zipcode_entries() -> list[dict]:
-    entries: list[dict] = []
-    for filename in ZIPCODE_FILES:
-        path = DATA_DIR / filename
-        if path.exists():
-            with path.open(encoding="utf-8") as handle:
-                entries.extend(json.load(handle))
-    return entries
-
-
-def check_location(zipcode: str, city: Optional[str]) -> Optional[dict]:
-    zipcode = (zipcode or "").strip()
-    if not zipcode:
-        return None
-
-    entries = [
-        entry
-        for entry in _load_zipcode_entries()
-        if entry.get("zipcode", "").startswith(zipcode)
-    ]
-    if city:
-        city_lower = city.lower()
-        city_matches = [
-            entry for entry in entries if entry.get("place", "").lower() == city_lower
-        ]
-        if city_matches:
-            entries = city_matches
-
-    if not entries:
-        return None
-
-    best = entries[0]
-    latitude = best.get("latitude")
-    longitude = best.get("longitude")
-    return {
-        "zipcode": best.get("zipcode"),
-        "place": best.get("place"),
-        "latitude": float(latitude) if latitude else None,
-        "longitude": float(longitude) if longitude else None,
-    }
-
-
 if __name__ == "__main__":
     test_addresses = [
         "Brandenburger Tor, Berlin",
