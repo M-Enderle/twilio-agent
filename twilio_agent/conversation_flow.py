@@ -106,6 +106,8 @@ async def incoming_call(request: Request):
 
     if "17657888" in caller_number or "1601212905" in caller_number:
         return await greeting(request)
+    
+    clear_caller_queue(caller_number)
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
     intent = get_intent(caller_number)
@@ -509,7 +511,12 @@ async def parse_plz_unified(request: Request):
     # Otherwise treat as PLZ
     plz = result
     save_job_info(await caller(request), "PLZ Tastatur", plz)
-    location = get_geocode_result(plz, None)
+    
+    try:
+        location = get_geocode_result(plz, None)
+    except Exception as e:
+        logger.error(f"Error getting geocode result: {e}")
+        location = None
 
     with new_response() as response:
         if location:
