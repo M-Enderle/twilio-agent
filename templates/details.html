@@ -752,12 +752,7 @@
         console.log('Formatting Standort:', value);
         // Handle object location data
         if (typeof value === 'object' && value !== null) {
-          const address = value.formatted_address;
-          
-          return address ? linkifyText(address) : 'Nicht verfügbar';
-        }
-        if (typeof value === 'object' && value !== null) {
-          const address = value.formatted_address;
+          const address = value.formatted_address ? value.formatted_address : value.google_maps_link;
           
           return address ? linkifyText(address) : 'Nicht verfügbar';
         }
