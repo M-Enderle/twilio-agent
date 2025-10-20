@@ -611,7 +611,7 @@
         
         for (const [key, value] of Object.entries(info)) {
           // Skip individual PLZ and Ort fields since they're combined in Standort
-          const excludeKeys = ['call_number', 'PLZ', 'Ort', 'hangup_reason', 'Live', 'Anbieter'];
+          const excludeKeys = ['call_number', 'PLZ', 'Ort', 'hangup_reason', 'Live', 'Anbieter', 'Service'];
             if (value != null && value !== '' && !excludeKeys.includes(key) && !key.toLowerCase().startsWith('audio')) {
             const p = document.createElement('p');
             p.innerHTML = `<strong>${key}:</strong> ${formatValue(key, value)}`;

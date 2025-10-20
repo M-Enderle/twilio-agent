@@ -786,8 +786,10 @@ async def add_locksmith_contacts(request: Request):
     clear_caller_queue(await caller(request))
     first_contact = get_job_info(await caller(request), "Anbieter") or "Andi"
     add_to_caller_queue(await caller(request), first_contact)
-    add_to_caller_queue(await caller(request), "Jan")
-    add_to_caller_queue(await caller(request), "Haas")
+    
+    if first_contact.lower() not in ["tiberius", "marcel"]:
+        add_to_caller_queue(await caller(request), "Jan")
+        add_to_caller_queue(await caller(request), "Haas")
     save_job_info(
         await caller(request), "Anruf Warteschlange", f"{first_contact}, Jan, Haas"
     )
