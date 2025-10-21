@@ -104,10 +104,7 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
 
 if __name__ == "__main__":
     test_addresses = [
-        "Brandenburger Tor, Berlin",
-        "Marienplatz, München",
-        "Stephansdom, Wien",
-        "Invalid Address 12345",
+        "87527",
     ]
     for addr in test_addresses:
         result = get_geocode_result(addr)

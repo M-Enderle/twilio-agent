@@ -513,7 +513,7 @@ async def parse_plz_unified(request: Request):
     save_job_info(await caller(request), "PLZ Tastatur", plz)
     
     try:
-        location = get_geocode_result(plz, None)
+        location = get_geocode_result(plz)
     except Exception as e:
         logger.error(f"Error getting geocode result: {e}")
         location = None
