@@ -20,7 +20,7 @@ def _ask_grok(system_prompt: str, user_prompt: str) -> str:
         logger.error("Client not initialized. Returning empty response.")
         return ""
     try:
-        chat = client.chat.create(model="grok-4-fast-non-reasoning")
+        chat = client.chat.create(model="grok-4-fast-non-reasoning", temperature=0)
         chat.append(system(system_prompt))
         chat.append(user(user_prompt))
         response_grok = chat.sample()
@@ -167,6 +167,62 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
         return False, f"Fehler: {e}", duration
 
 
+def contains_location(spoken_text: str) -> tuple[bool, str, float]:
+    """
+    Determines if spoken text contains any kind of location information.
+    Returns True if location info is present, else False.
+    """
+    start_time = time.time()
+    if not spoken_text:
+        return False, "Kein Text vorhanden.", 0.0
+
+    try:
+        system_prompt = """
+    Entscheide, ob der gegebene Text Standortinformationen enthält. Gib eine kurze Begründung (max 10 Wörter) und "Ja" oder "Nein" auf Deutsch aus.
+
+    Format: <Begründung> -> <Ja/Nein>
+    Immer -> verwenden. Ohne < >.
+
+    Ja bei jeglichen Standortinformationen, inkl.:
+    - Straßenname, Hausnummer
+    - Postleitzahl, Ortsname
+    - Autobahnnummern mit Ortsangaben
+    - Teiladressen oder nur Ortsnamen
+
+    Nein bei:
+    - Keine Standortinformationen
+    - Allgemeine Aussagen ohne Adressbezug
+    - Aussage dass Standort unbekannt ist
+
+    Beispiele:
+    - "Ich wohne in der Güterstraße 12 in 94469 Deggendorf." => "Enthält Adresse. -> Ja"
+    - "Kannst du zu mir kommen? Ich bin krank." => "Keine Adresse. -> Nein"
+    """
+        user_prompt = f'Text: "{spoken_text}"'
+
+        response = _ask_grok(system_prompt, user_prompt).strip()
+        if "->" in response:
+            reasoning, decision = response.split("->", 1)
+            decision = decision.strip()
+            reasoning = reasoning.strip()
+        else:
+            decision = response
+            reasoning = "Keine Begründung gegeben."
+
+        contains_loc = decision == "Ja"
+        duration = time.time() - start_time
+
+        logger.info(
+            f"Location presence check completed in {duration:.3f}s. Result: {contains_loc}"
+        )
+        return contains_loc, reasoning, duration
+
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"Error in contains_location after {duration:.3f}s: {e}")
+        return False, f"Fehler: {e}", duration
+
+
 def extract_location(spoken_text: str) -> tuple[str, str, float]:
     """
     Extracts only the address part from spoken text.
@@ -178,7 +234,7 @@ def extract_location(spoken_text: str) -> tuple[str, str, float]:
         system_prompt = """
     Extrahiere NUR den Adressteil aus dem gesprochenen Text. Gib die Adresse und eine kurze Begründung auf Deutsch aus.
 
-    Gebe nur die Adresse zurück, ohne zusätzliche Erklärungen.
+    Gebe nur die Adresse zurück, ohne zusätzliche Erklärungen. Keine Begründung oder Kontext. Nur die Adresse.
 
     REGELN:
     - Behalte: Straßenname, Hausnummer, PLZ, Ortsname
@@ -267,4 +323,24 @@ if __name__ == "__main__":
         address, reasoning, duration = extract_location(text)
         print(
             f"Case {i}: '{text}' -> '{address}' (Reason: {reasoning}, Time: {duration:.3f}s)"
+        )
+
+    test_cases_contains_location = [
+        "Ich wohne in der Güterstraße 12 in 94469 Deggendorf.",
+        "Kannst du zu mir kommen? Ich bin krank.",
+        "7 9 5 9 2",
+        "Osterhofen",
+        "Ich bin auf der A3 bei Plattling.",
+        "Keine Adresse hier.",
+        "In der Nähe von Passau, Straße unbekannt.",
+        "Treffen wir uns im Park.",
+        "Meine Wohnung ist in der Innenstadt.",
+        "Ich habe keine Ahnung, wo ich bin.",
+    ]
+
+    print("\nTesting contains_location:")
+    for i, text in enumerate(test_cases_extract, 1):
+        has_location, reasoning, duration = contains_location(text)
+        print(
+            f"Case {i}: '{text}' -> {has_location} (Reason: {reasoning}, Time: {duration:.3f}s)"
         )

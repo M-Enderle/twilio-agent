@@ -41,7 +41,7 @@ from twilio_agent.actions.twilio_actions import (
     start_transfer,
 )
 from twilio_agent.ui import router as ui_router
-from twilio_agent.utils.ai import classify_intent, extract_location, yes_no_question
+from twilio_agent.utils.ai import classify_intent, extract_location, yes_no_question, contains_location
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.location_utils import  get_geocode_result
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
@@ -155,7 +155,7 @@ async def incoming_call(request: Request):
 
 async def greeting(request: Request):
     with new_response() as response:
-        message = "Hallo, Schön das du bei uns anrufst. Du sprichst mit dem Assistent der Notdienststation, ich verbinde dich gleich mit dem richtigen Ansprechpartner! Wie kann ich dir helfen?"
+        message = "Hallo, du sprichst mit dem Assistent der Notdienststation, ich verbinde dich gleich mit dem richtigen Ansprechpartner! Wie kann ich dir helfen?"
         say(response, message)
         agent_message(await caller(request), message)
 
@@ -310,7 +310,7 @@ async def address_query_unified(request: Request):
         await add_locksmith_contacts(request)
 
     with new_response() as response:
-        message = "Kannst du mir deine Adresse nennen? Wenn nicht, drücke bitte die 1."
+        message = "Nenne mir jetzt bitte deine Adresse."
         say(response, message)
         agent_message(await caller(request), message)
 
@@ -319,7 +319,7 @@ async def address_query_unified(request: Request):
             language="de-DE",
             action="/parse-address-query-unified",
             speechTimeout="auto",
-            timeout=15,
+            timeout=6,
             enhanced=True,
             model="experimental_conversations",
             numDigits=1,
@@ -328,7 +328,7 @@ async def address_query_unified(request: Request):
 
         say(
             response,
-            "Bitte nenne deine Adresse oder drücke 1 wenn du sie nicht kennst.",
+            "Bitte sage deine Adresse.",
         )
 
         gather2 = Gather(
@@ -336,7 +336,7 @@ async def address_query_unified(request: Request):
             language="de-DE",
             action="/parse-address-query-unified",
             speechTimeout="auto",
-            timeout=15,
+            timeout=6,
             enhanced=True,
             model="experimental_conversations",
             numDigits=1,
@@ -362,10 +362,24 @@ async def parse_address_query_unified(request: Request):
     ):
         save_job_info(await caller(request), "Adresse unbekannt", "Ja")
         return await ask_send_sms_unified(request)
+    
+    try:
+        is_location, reasoning, time = await asyncio.wait_for(
+            asyncio.to_thread(contains_location, speech_result), timeout=6.0
+        )
+        ai_message(
+            await caller(request),
+            f"<Contains location: {is_location}. Reasoning: {reasoning}>",
+            time,
+        )
+    except asyncio.TimeoutError:
+        ai_message(await caller(request), "<Request timed out>", 6.0)
+        is_location = False  # Assume no location if timeout
+    
+    if is_location:
+        location = get_geocode_result(speech_result)
 
-    location = get_geocode_result(speech_result)
-
-    if not location:
+    if not is_location or not location:
 
         try:
             ai_result, reasoning, duration = await asyncio.wait_for(
@@ -591,7 +605,7 @@ async def ask_send_sms_unified(request: Request):
             return send_request(request, response)
 
     with new_response() as response:
-        message = "Wir können dir eine SMS mit einem Link zusenden, der uns deinen Standort übermittelt. Bist du damit einverstanden?"
+        message = "Wir können dir eine SMS mit einem Link zusenden, der uns deinen Standort übermittelt. Möchtest du das?"
         say(response, message)
         agent_message(await caller(request), message)
 
