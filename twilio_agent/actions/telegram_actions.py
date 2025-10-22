@@ -7,6 +7,10 @@ import pytz
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from twilio_agent.actions.redis_actions import get_call_timestamp
+import logging
+
+
+logger = logging.getLogger("uvicorn")
 
 dotenv.load_dotenv()
 
@@ -29,7 +33,7 @@ async def send_telegram_notification(caller_number: str) -> str:
         return live_ui_url
 
     except Exception as e:
-        print(f"Error sending Telegram notification: {e}")
+        logger.error(f"Error sending Telegram notification: {e}")
         return ""
 
 
@@ -51,11 +55,9 @@ async def send_message(tracking_url: str, phone: str, chat_id: str = None):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        print(f"Sending message to {chat_id}: {message}, {reply_markup}")
         await bot.send_message(chat_id=chat_id, text=message, reply_markup=reply_markup)
-        print("Message sent successfully!")
     except Exception as e:
-        print(f"Error sending message: {e}")
+        logger.error(f"Error sending message: {e}")
     finally:
         try:
             await bot.close()

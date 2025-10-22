@@ -533,17 +533,26 @@ async def parse_plz_unified(request: Request):
         location = None
 
     with new_response() as response:
-        if location:
-            save_location(await caller(request), location)
-            link = (
-                f"https://maps.google.com/?q={location['latitude']},{location['longitude']}"
-                if location.get("latitude") and location.get("longitude")
-                else ""
+        if location and (location.plz or location.ort):
+            # Normalize location data for consistent storage
+            location_dict = location._asdict()
+            # Convert plz/ort to zipcode/place for compatibility
+            location_dict["zipcode"] = location.plz
+            location_dict["place"] = location.ort
+            save_location(await caller(request), location_dict)
+            place = " ".join(
+                filter(
+                    None,
+                    [
+                        " ".join(str(location.plz)) if location.plz else None,
+                        location.ort,
+                    ],
+                )
+            ).strip()  # Do not change anything here!
+            google_message(
+                await caller(request),
+                f"Standort über PLZ gefunden: {location.formatted_address} ({location.google_maps_link})",
             )
-            summary = f"Standort über PLZ gefunden: {location.get('place', 'Unbekannt')} {location.get('zipcode', '')}".strip()
-            if link:
-                summary += f" ({link})"
-            google_message(await caller(request), summary)
             return await calculate_cost_unified(request)
         else:
             google_message(
@@ -560,6 +569,8 @@ async def parse_plz_unified(request: Request):
 async def parse_location_correct_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
+    user_message(await caller(request), speech_result)
+    
     try:
         correct, reasoning, duration = await asyncio.wait_for(
             asyncio.to_thread(
@@ -577,8 +588,7 @@ async def parse_location_correct_unified(request: Request):
             agent_message(await caller(request), message)
             start_transfer(response, await caller(request))
             return send_request(request, response)
-
-    user_message(await caller(request), speech_result)
+    
     ai_message(
         await caller(request),
         f"<Address correct: {correct}. Reasoning: {reasoning}>",
@@ -885,8 +895,7 @@ async def parse_transfer_call(request: Request, name: str):
     contact_manager = ContactManager()
     transferred_phone = contact_manager.get_phone(name)
     send_job_details_sms(await caller(request), transferred_phone)
-    set_transferred_to(await caller(request), transferred_phone)
-    save_job_info(await caller(request), "Weitergeleitet an", name)
+    set_transferred_to(await caller(request), name)
     logger.info(f"Job details SMS sent to {transferred_phone}")
 
     with new_response() as response:

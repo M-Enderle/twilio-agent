@@ -41,11 +41,11 @@ def _normalize_recording_type(recording_type: str | None) -> str:
 def _recording_key(
     number_without_plus: str, timestamp: str, recording_type: str
 ) -> str:
-    return f"verlauf:{number_without_plus}:{timestamp}:recording:{recording_type}"
+    return f"notdienststation:verlauf:{number_without_plus}:{timestamp}:recording:{recording_type}"
 
 
 def _set_hist_info(call_number: str, key: str, value: str) -> str:
-    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
     if not start_time:
         logger.debug(
             "Skipping history update for %s because no start time is stored.",
@@ -54,7 +54,7 @@ def _set_hist_info(call_number: str, key: str, value: str) -> str:
         return
 
     history_key = (
-        f"verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:info"
+        f"notdienststation:verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:info"
     )
 
     redis_content = redis.get(history_key)
@@ -71,7 +71,7 @@ def _set_hist_info(call_number: str, key: str, value: str) -> str:
 
 def init_new_call(call_number: str):
     starttime = datetime.datetime.now(tz).strftime("%Y%m%dT%H%M%S")
-    redis.set(f"anrufe:{call_number}:gestartet_um", starttime, ex=persistance_time)
+    redis.set(f"notdienststation:anrufe:{call_number}:gestartet_um", starttime, ex=persistance_time)
     _set_hist_info(call_number, "Startzeit", datetime.datetime.now(tz).isoformat())
     _set_hist_info(call_number, "Anrufnummer", call_number)
     save_job_info(call_number, "Live", "Ja")
@@ -81,7 +81,7 @@ def get_intent(call_number: str, return_anonymou: bool = False) -> str:
     try:
         if call_number == "anonymous" and not return_anonymou:
             return None
-        return redis.get(f"anrufe:{call_number}:anliegen").decode("utf-8")
+        return redis.get(f"notdienststation:anrufe:{call_number}:anliegen").decode("utf-8")
     except Exception as e:
         return None
 
@@ -89,7 +89,7 @@ def get_intent(call_number: str, return_anonymou: bool = False) -> str:
 def set_intent(call_number: str, intent: str):
     if call_number == "anonymous":
         return
-    redis.set(f"anrufe:{call_number}:anliegen", intent, ex=persistance_time)
+    redis.set(f"notdienststation:anrufe:{call_number}:anliegen", intent, ex=persistance_time)
     _set_hist_info(call_number, "Anliegen", intent)
 
 
@@ -127,11 +127,11 @@ def twilio_message(call_number: str, message: str):
 
 
 def _save_message(call_number: str, message: str, role: str):
-    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
     if not start_time:
         return
 
-    key = f"verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:nachrichten"
+    key = f"notdienststation:verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:nachrichten"
     existing_messages = redis.get(key)
 
     if existing_messages:
@@ -149,7 +149,7 @@ def _save_message(call_number: str, message: str, role: str):
 
 def save_location(call_number: str, location: dict):
     redis.set(
-        f"anrufe:{call_number}:standort",
+        f"notdienststation:anrufe:{call_number}:standort",
         json.dumps(location, indent=2, ensure_ascii=False),
         ex=persistance_time,
     )
@@ -157,59 +157,59 @@ def save_location(call_number: str, location: dict):
 
 
 def get_location(call_number: str) -> dict:
-    return json.loads(redis.get(f"anrufe:{call_number}:standort").decode("utf-8"))
+    return json.loads(redis.get(f"notdienststation:anrufe:{call_number}:standort").decode("utf-8"))
 
 
 def get_shared_location(call_number: str) -> dict:
-    location_data = redis.get(f"anrufe:{call_number}:geteilter_standort")
+    location_data = redis.get(f"notdienststation:anrufe:{call_number}:geteilter_standort")
     if location_data:
         return json.loads(location_data.decode("utf-8"))
     return None
 
 
 def add_to_caller_queue(caller: str, name: str):
-    queue = json.loads(redis.get(f"anrufe:{caller}:warteschlange") or b"[]")
+    queue = json.loads(redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]")
     queue.append(name)
-    redis.set(f"anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
+    redis.set(f"notdienststation:anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
 
 
 def get_next_caller_in_queue(caller: str) -> str:
-    queue_data = redis.get(f"anrufe:{caller}:warteschlange")
+    queue_data = redis.get(f"notdienststation:anrufe:{caller}:warteschlange")
     queue = json.loads(queue_data.decode("utf-8")) if queue_data else []
     return queue[0] if queue else None
 
 
 def delete_next_caller(caller: str):
-    queue = json.loads(redis.get(f"anrufe:{caller}:warteschlange") or b"[]")
+    queue = json.loads(redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]")
     if queue:
         queue.pop(0)
-    redis.set(f"anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
+    redis.set(f"notdienststation:anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
 
 
 def clear_caller_queue(caller: str):
-    redis.delete(f"anrufe:{caller}:warteschlange")
+    redis.delete(f"notdienststation:anrufe:{caller}:warteschlange")
 
 
 def set_transferred_to(caller: str, transferred_to: str):
-    redis.set(f"anrufe:{caller}:weitergeleitet_an", transferred_to, ex=persistance_time)
+    redis.set(f"notdienststation:anrufe:{caller}:Weitergeleitet an", transferred_to, ex=persistance_time)
     _set_hist_info(caller, "Weitergeleitet an", transferred_to)
 
 
 def get_transferred_to(caller: str) -> str | None:
-    return redis.get(f"anrufe:{caller}:weitergeleitet_an")
+    return redis.get(f"notdienststation:anrufe:{caller}:Weitergeleitet an")
 
 
 def save_job_info(caller: str, detail_name: str, detail_value: str):
     _set_hist_info(caller, detail_name, detail_value)
-    redis.set(f"anrufe:{caller}:{detail_name}", detail_value, ex=persistance_time)
+    redis.set(f"notdienststation:anrufe:{caller}:{detail_name}", detail_value, ex=persistance_time)
 
 
 def delete_job_info(caller: str, detail_name: str):
-    redis.delete(f"anrufe:{caller}:{detail_name}")
+    redis.delete(f"notdienststation:anrufe:{caller}:{detail_name}")
 
 
 def get_job_info(caller: str, detail_name: str) -> str | None:
-    detail = redis.get(f"anrufe:{caller}:{detail_name}")
+    detail = redis.get(f"notdienststation:anrufe:{caller}:{detail_name}")
     if detail:
         return detail.decode("utf-8")
     return None
@@ -218,7 +218,7 @@ def get_job_info(caller: str, detail_name: str) -> str | None:
 def get_call_timestamp(call_number: str) -> str | None:
     """Get the timestamp for when a call was started"""
     try:
-        timestamp = redis.get(f"anrufe:{call_number}:gestartet_um")
+        timestamp = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
         if timestamp:
             return timestamp.decode("utf-8")
         return None
@@ -237,7 +237,7 @@ def save_call_recording(
     if not call_number or not recording_bytes or call_number == "anonymous":
         return
 
-    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
     if not start_time:
         return
 
@@ -337,13 +337,13 @@ def get_available_recordings(number: str, timestamp: str) -> dict[str, dict]:
 
 
 def cleanup_call(call_number: str):
-    start_time = redis.get(f"anrufe:{call_number}:gestartet_um")
+    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
     if not start_time:
         return
 
     keys_to_delete = [
-        f"anrufe:{call_number}:gestartet_um",
-        f"anrufe:{call_number}:warteschlange",
+        f"notdienststation:anrufe:{call_number}:gestartet_um",
+        f"notdienststation:anrufe:{call_number}:warteschlange",
     ]
 
     logger.warning(f"Cleaning up call data for {call_number}: {keys_to_delete}")

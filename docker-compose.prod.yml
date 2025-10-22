@@ -9,8 +9,6 @@ services:
       - "8000:8000"
     env_file:
       - .env.production
-    depends_on:
-      - redis
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs
@@ -20,3 +18,5 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

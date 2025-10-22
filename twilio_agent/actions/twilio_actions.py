@@ -35,6 +35,7 @@ account_sid = os.environ["TWILIO_ACCOUNT_SID"]
 auth_token = os.environ["TWILIO_AUTH_TOKEN"]
 server_url = os.environ["SERVER_URL"]
 twilio_phone_number = os.environ["TWILIO_PHONE_NUMBER"]
+notdienststation_phone_number = os.environ["NOTDIENSTSTATION_PHONE_NUMBER"]
 
 client = Client(account_sid, auth_token)
 
@@ -48,7 +49,7 @@ httpx_logger.setLevel(logging.WARNING)
 async def caller(request: Request):
     form_data = await request.form()
     caller = form_data.get("Caller")
-    if caller == twilio_phone_number:
+    if caller == twilio_phone_number or caller == notdienststation_phone_number:
         return form_data.get("Called")
     return caller
 
