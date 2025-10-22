@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import dotenv
 import Levenshtein
@@ -464,14 +465,13 @@ async def parse_address_query_unified(request: Request):
 
 async def ask_plz_unified(request: Request):
     with new_response() as response:
-        message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein. Wenn du die Postleitzahl nicht kennst, drücke bitte die 1."
+        message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein."
 
         gather = Gather(
             input="dtmf speech",
             action="/parse-plz-unified",
             timeout=10,
             numDigits=5,
-            enhanced=True,
             model="experimental_utterances",
             language="de-DE",
         )
@@ -485,13 +485,12 @@ async def ask_plz_unified(request: Request):
             action="/parse-plz-unified",
             numDigits=5,
             timeout=15,
-            enhanced=True,
             model="experimental_utterances",
             language="de-DE",
         )
         say(
             gather2,
-            "Bitte gib die Postleitzahl ein oder drücke 1 wenn du sie nicht kennst.",
+            "Bitte gib deine Postleitzahl ein.",
         )
 
         response.append(gather2)
@@ -511,17 +510,14 @@ async def parse_plz_unified(request: Request):
         result = str(digits)
         logger.info(f"Digits: {result}")
     elif speech:
-        result = str(speech).strip().replace(" ", "").replace(",", "").replace(".", "")
+        result = str(speech)
+        re_identifier = "(?<=\b\d)\s(?=\d(?: \d){2,3}\b)|(?<=\b\d \d)\s(?=\d(?: \d){1,2}\b)|(?<=\b\d(?: \d){2})\s(?=\d(?: \d)?\b)|(?<=\b\d(?: \d){3})\s(?=\d\b)"
+        result = re.sub(re_identifier, "", result)
         logger.info(f"Speech: {result}")
     else:
         result = "1"
 
     user_message(await caller(request), result)
-
-    # Check if user pressed 1 (doesn't know PLZ)
-    if result.strip() in ("1", "eins", "eine", "ein"):
-        save_job_info(await caller(request), "PLZ unbekannt", "Ja")
-        return await ask_send_sms_unified(request)
 
     # Otherwise treat as PLZ
     plz = result
