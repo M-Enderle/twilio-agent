@@ -375,12 +375,13 @@ async def parse_address_query_unified(request: Request):
     except asyncio.TimeoutError:
         ai_message(await caller(request), "<Request timed out>", 6.0)
         is_location = False  # Assume no location if timeout
+
+    if not is_location:
+        return await ask_plz_unified(request)
     
-    if is_location:
-        location = get_geocode_result(speech_result)
+    location = get_geocode_result(speech_result)
 
-    if not is_location or not location:
-
+    if not location:
         try:
             ai_result, reasoning, duration = await asyncio.wait_for(
                 asyncio.to_thread(extract_location, speech_result), timeout=6.0
