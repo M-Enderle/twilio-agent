@@ -28,7 +28,7 @@ baseten_client = OpenAI(
 
 # --- Cache System Setup ---
 # Prefer absolute path inside container; fallback handled in _get_cache_dir
-CACHE_BASE_DIR = Path("/app/ai_cache")
+CACHE_BASE_DIR = Path("/app/ai_cache") if os.path.isabs("/app/ai_cache") else Path("./ai_cache")
 
 
 def _get_cache_dir(function_name: str) -> Path:
@@ -538,9 +538,9 @@ if __name__ == "__main__":
 
     print("Testing classify_intent:")
     for i, text in enumerate(test_cases_classify, 1):
-        result, reasoning, duration = classify_intent(text)
+        result, reasoning, duration, model_source = classify_intent(text)
         print(
-            f"Case {i}: '{text}' -> {result} (Reason: {reasoning}, Time: {duration:.3f}s)"
+            f"Case {i}: '{text}' -> {result} (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
 
     # Test cases for yes_no_question
@@ -559,9 +559,9 @@ if __name__ == "__main__":
 
     print("\nTesting yes_no_question:")
     for i, (text, context) in enumerate(test_cases_yes_no, 1):
-        is_agreement, reasoning, duration = yes_no_question(text, context)
+        is_agreement, reasoning, duration, model_source = yes_no_question(text, context)
         print(
-            f"Case {i}: '{text}' in '{context}' -> {is_agreement} (Reason: {reasoning}, Time: {duration:.3f}s)"
+            f"Case {i}: '{text}' in '{context}' -> {is_agreement} (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
 
     # Test cases for extract_location
@@ -580,9 +580,9 @@ if __name__ == "__main__":
 
     print("\nTesting extract_location:")
     for i, text in enumerate(test_cases_extract, 1):
-        address, reasoning, duration = extract_location(text)
+        address, reasoning, duration, model_source = extract_location(text)
         print(
-            f"Case {i}: '{text}' -> '{address}' (Reason: {reasoning}, Time: {duration:.3f}s)"
+            f"Case {i}: '{text}' -> '{address}' (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
 
     test_cases_contains_location = [
@@ -600,7 +600,7 @@ if __name__ == "__main__":
 
     print("\nTesting contains_location:")
     for i, text in enumerate(test_cases_extract, 1):
-        has_location, reasoning, duration = contains_location(text)
+        has_location, reasoning, duration, model_source = contains_location(text)
         print(
-            f"Case {i}: '{text}' -> {has_location} (Reason: {reasoning}, Time: {duration:.3f}s)"
+            f"Case {i}: '{text}' -> {has_location} (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
