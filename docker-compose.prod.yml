@@ -13,6 +13,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./ai_cache:/app/ai_cache
+    user: "0:0"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

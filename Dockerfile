@@ -44,6 +44,9 @@ COPY --from=dependencies /usr/local /usr/local
 # Copy application source (for static/templates and runtime assets)
 COPY . .
 
+# Fix ownership after copying files
+RUN chown -R appuser:appuser /app
+
 USER appuser
 
 EXPOSE 8000

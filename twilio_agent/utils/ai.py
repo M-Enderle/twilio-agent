@@ -27,34 +27,62 @@ baseten_client = OpenAI(
 )
 
 # --- Cache System Setup ---
-CACHE_BASE_DIR = Path("./ai_cache")
+# Prefer absolute path inside container; fallback handled in _get_cache_dir
+CACHE_BASE_DIR = Path("/app/ai_cache")
 
 
 def _get_cache_dir(function_name: str) -> Path:
-    """Get or create cache directory for a specific function."""
-    cache_dir = CACHE_BASE_DIR / function_name
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
+    """Get or create cache directory for a specific function, with fallback.
+
+    If creating the directory under CACHE_BASE_DIR is not permitted, fall back to
+    using /tmp which should always be writable inside the container.
+    """
+    primary_dir = CACHE_BASE_DIR / function_name
+    try:
+        primary_dir.mkdir(parents=True, exist_ok=True)
+        return primary_dir
+    except PermissionError as e:
+        logger.warning(
+            f"Permission denied for cache dir '{primary_dir}'. Falling back to /tmp. Error: {e}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"Error creating cache dir '{primary_dir}'. Falling back to /tmp. Error: {e}"
+        )
+
+    fallback_base = Path("/tmp/ai_cache")
+    fallback_dir = fallback_base / function_name
+    try:
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        return fallback_dir
+    except Exception as e:
+        # As a last resort, return the primary path (calls will likely fail, but we log it)
+        logger.error(
+            f"Failed to create fallback cache dir '{fallback_dir}'. Continuing with primary path which may fail. Error: {e}"
+        )
+        return primary_dir
 
 
 def _get_cache_key(input_data: dict) -> str:
-    """Generate a cache key from input data by sanitizing the first text value."""
-    # Extract the first value that looks like text (typically spoken_text or similar)
-    text_value = None
+    """Generate a cache key from input data by sanitizing all text values."""
+    # Collect all text values from the input data
+    text_values = []
     for key in sorted(input_data.keys()):  # Sort for consistency
         value = input_data[key]
-        if isinstance(value, str):
-            text_value = value
-            break
+        if isinstance(value, str) and value.strip():  # Only non-empty strings
+            text_values.append(value)
 
-    if not text_value:
+    if not text_values:
         # Fallback to hash if no text found
         data_str = json.dumps(input_data, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(data_str.encode()).hexdigest()
 
+    # Combine all text values with a separator
+    combined_text = " | ".join(text_values)
+
     # Normalize unicode and remove accents/umlauts
     # NFD decomposes characters like ä to a + diacritic, then we filter out diacritics
-    normalized = unicodedata.normalize("NFD", text_value)
+    normalized = unicodedata.normalize("NFD", combined_text)
     without_accents = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
 
     # Replace spaces with underscores and remove all punctuation
