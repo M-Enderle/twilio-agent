@@ -9,11 +9,9 @@ from fastapi.responses import JSONResponse, Response
 from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client
 
-from twilio_agent.actions.redis_actions import (
-    get_call_recording_binary,
-    get_call_timestamp,
-    save_call_recording,
-)
+from twilio_agent.actions.redis_actions import (get_call_recording_binary,
+                                                get_call_timestamp,
+                                                save_call_recording)
 
 dotenv.load_dotenv()
 

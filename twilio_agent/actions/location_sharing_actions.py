@@ -150,7 +150,9 @@ def receive_location(link_id: str, location_data: LocationData):
         link_data["status"] = "used"
 
         redis_client.setex(
-            f"notdienststation:standort_link:{link_id}", 60 * 60 * 24, json.dumps(link_data)
+            f"notdienststation:standort_link:{link_id}",
+            60 * 60 * 24,
+            json.dumps(link_data),
         )
 
         # Trigger outbound call to the phone number associated with the link

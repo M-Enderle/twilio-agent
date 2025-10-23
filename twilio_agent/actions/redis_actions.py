@@ -53,9 +53,7 @@ def _set_hist_info(call_number: str, key: str, value: str) -> str:
         )
         return
 
-    history_key = (
-        f"notdienststation:verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:info"
-    )
+    history_key = f"notdienststation:verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:info"
 
     redis_content = redis.get(history_key)
     if redis_content:
@@ -71,7 +69,11 @@ def _set_hist_info(call_number: str, key: str, value: str) -> str:
 
 def init_new_call(call_number: str):
     starttime = datetime.datetime.now(tz).strftime("%Y%m%dT%H%M%S")
-    redis.set(f"notdienststation:anrufe:{call_number}:gestartet_um", starttime, ex=persistance_time)
+    redis.set(
+        f"notdienststation:anrufe:{call_number}:gestartet_um",
+        starttime,
+        ex=persistance_time,
+    )
     _set_hist_info(call_number, "Startzeit", datetime.datetime.now(tz).isoformat())
     _set_hist_info(call_number, "Anrufnummer", call_number)
     save_job_info(call_number, "Live", "Ja")
@@ -81,7 +83,9 @@ def get_intent(call_number: str, return_anonymou: bool = False) -> str:
     try:
         if call_number == "anonymous" and not return_anonymou:
             return None
-        return redis.get(f"notdienststation:anrufe:{call_number}:anliegen").decode("utf-8")
+        return redis.get(f"notdienststation:anrufe:{call_number}:anliegen").decode(
+            "utf-8"
+        )
     except Exception as e:
         return None
 
@@ -89,7 +93,9 @@ def get_intent(call_number: str, return_anonymou: bool = False) -> str:
 def set_intent(call_number: str, intent: str):
     if call_number == "anonymous":
         return
-    redis.set(f"notdienststation:anrufe:{call_number}:anliegen", intent, ex=persistance_time)
+    redis.set(
+        f"notdienststation:anrufe:{call_number}:anliegen", intent, ex=persistance_time
+    )
     _set_hist_info(call_number, "Anliegen", intent)
 
 
@@ -157,20 +163,30 @@ def save_location(call_number: str, location: dict):
 
 
 def get_location(call_number: str) -> dict:
-    return json.loads(redis.get(f"notdienststation:anrufe:{call_number}:standort").decode("utf-8"))
+    return json.loads(
+        redis.get(f"notdienststation:anrufe:{call_number}:standort").decode("utf-8")
+    )
 
 
 def get_shared_location(call_number: str) -> dict:
-    location_data = redis.get(f"notdienststation:anrufe:{call_number}:geteilter_standort")
+    location_data = redis.get(
+        f"notdienststation:anrufe:{call_number}:geteilter_standort"
+    )
     if location_data:
         return json.loads(location_data.decode("utf-8"))
     return None
 
 
 def add_to_caller_queue(caller: str, name: str):
-    queue = json.loads(redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]")
+    queue = json.loads(
+        redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]"
+    )
     queue.append(name)
-    redis.set(f"notdienststation:anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
+    redis.set(
+        f"notdienststation:anrufe:{caller}:warteschlange",
+        json.dumps(queue),
+        ex=persistance_time,
+    )
 
 
 def get_next_caller_in_queue(caller: str) -> str:
@@ -180,10 +196,16 @@ def get_next_caller_in_queue(caller: str) -> str:
 
 
 def delete_next_caller(caller: str):
-    queue = json.loads(redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]")
+    queue = json.loads(
+        redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]"
+    )
     if queue:
         queue.pop(0)
-    redis.set(f"notdienststation:anrufe:{caller}:warteschlange", json.dumps(queue), ex=persistance_time)
+    redis.set(
+        f"notdienststation:anrufe:{caller}:warteschlange",
+        json.dumps(queue),
+        ex=persistance_time,
+    )
 
 
 def clear_caller_queue(caller: str):
@@ -191,7 +213,11 @@ def clear_caller_queue(caller: str):
 
 
 def set_transferred_to(caller: str, transferred_to: str):
-    redis.set(f"notdienststation:anrufe:{caller}:Weitergeleitet an", transferred_to, ex=persistance_time)
+    redis.set(
+        f"notdienststation:anrufe:{caller}:Weitergeleitet an",
+        transferred_to,
+        ex=persistance_time,
+    )
     _set_hist_info(caller, "Weitergeleitet an", transferred_to)
 
 
@@ -201,7 +227,11 @@ def get_transferred_to(caller: str) -> str | None:
 
 def save_job_info(caller: str, detail_name: str, detail_value: str):
     _set_hist_info(caller, detail_name, detail_value)
-    redis.set(f"notdienststation:anrufe:{caller}:{detail_name}", detail_value, ex=persistance_time)
+    redis.set(
+        f"notdienststation:anrufe:{caller}:{detail_name}",
+        detail_value,
+        ex=persistance_time,
+    )
 
 
 def delete_job_info(caller: str, detail_name: str):

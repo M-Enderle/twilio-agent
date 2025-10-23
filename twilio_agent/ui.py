@@ -41,8 +41,12 @@ async def websocket_details(websocket: WebSocket, number: str, timestamp: str):
     try:
         while True:
             # Get current data from Redis
-            redis_info = redis.get(f"notdienststation:verlauf:{number}:{timestamp}:info")
-            redis_messages = redis.get(f"notdienststation:verlauf:{number}:{timestamp}:nachrichten")
+            redis_info = redis.get(
+                f"notdienststation:verlauf:{number}:{timestamp}:info"
+            )
+            redis_messages = redis.get(
+                f"notdienststation:verlauf:{number}:{timestamp}:nachrichten"
+            )
 
             if redis_info:
                 info_raw = yaml.safe_load(redis_info.decode("utf-8"))

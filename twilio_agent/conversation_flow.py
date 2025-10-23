@@ -8,43 +8,32 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from twilio.twiml.voice_response import Gather
 
-from twilio_agent.actions.location_sharing_actions import router as location_router
+from twilio_agent.actions.location_sharing_actions import \
+    router as location_router
 from twilio_agent.actions.recording_actions import router as recording_router
 from twilio_agent.actions.recording_actions import start_recording
-from twilio_agent.actions.redis_actions import (
-    add_to_caller_queue,
-    agent_message,
-    ai_message,
-    clear_caller_queue,
-    delete_next_caller,
-    get_intent,
-    get_job_info,
-    get_location,
-    get_transferred_to,
-    google_message,
-    init_new_call,
-    save_job_info,
-    save_location,
-    set_intent,
-    set_transferred_to,
-    twilio_message,
-    user_message,
-)
+from twilio_agent.actions.redis_actions import (add_to_caller_queue,
+                                                agent_message, ai_message,
+                                                clear_caller_queue,
+                                                delete_next_caller, get_intent,
+                                                get_job_info, get_location,
+                                                get_transferred_to,
+                                                google_message, init_new_call,
+                                                save_job_info, save_location,
+                                                set_intent, set_transferred_to,
+                                                twilio_message, user_message)
 from twilio_agent.actions.telegram_actions import send_telegram_notification
-from twilio_agent.actions.twilio_actions import (
-    caller,
-    fallback_no_response,
-    new_response,
-    say,
-    send_job_details_sms,
-    send_request,
-    send_sms_with_link,
-    start_transfer,
-)
+from twilio_agent.actions.twilio_actions import (caller, fallback_no_response,
+                                                 new_response, say,
+                                                 send_job_details_sms,
+                                                 send_request,
+                                                 send_sms_with_link,
+                                                 start_transfer)
 from twilio_agent.ui import router as ui_router
-from twilio_agent.utils.ai import classify_intent, extract_location, yes_no_question, contains_location
+from twilio_agent.utils.ai import (classify_intent, contains_location,
+                                   extract_location, yes_no_question)
 from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.location_utils import  get_geocode_result
+from twilio_agent.utils.location_utils import get_geocode_result
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
 
 dotenv.load_dotenv()
@@ -107,7 +96,7 @@ async def incoming_call(request: Request):
 
     if "17657888" in caller_number or "1601212905" in caller_number:
         return await greeting(request)
-    
+
     clear_caller_queue(caller_number)
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
@@ -363,7 +352,7 @@ async def parse_address_query_unified(request: Request):
     ):
         save_job_info(await caller(request), "Adresse unbekannt", "Ja")
         return await ask_send_sms_unified(request)
-    
+
     try:
         is_location, reasoning, time = await asyncio.wait_for(
             asyncio.to_thread(contains_location, speech_result), timeout=6.0
@@ -379,7 +368,7 @@ async def parse_address_query_unified(request: Request):
 
     if not is_location:
         return await ask_plz_unified(request)
-    
+
     location = get_geocode_result(speech_result)
 
     if not location:
@@ -505,7 +494,7 @@ async def parse_plz_unified(request: Request):
 
     digits = form_data.get("Digits", "")
     speech = form_data.get("SpeechResult", "")
-    
+
     if digits:
         result = str(digits)
         logger.info(f"Digits: {result}")
@@ -522,7 +511,7 @@ async def parse_plz_unified(request: Request):
     # Otherwise treat as PLZ
     plz = result
     save_job_info(await caller(request), "PLZ Tastatur", plz)
-    
+
     try:
         location = get_geocode_result(plz)
     except Exception as e:
@@ -567,7 +556,7 @@ async def parse_location_correct_unified(request: Request):
     form_data = await request.form()
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
-    
+
     try:
         correct, reasoning, duration = await asyncio.wait_for(
             asyncio.to_thread(
@@ -585,7 +574,7 @@ async def parse_location_correct_unified(request: Request):
             agent_message(await caller(request), message)
             start_transfer(response, await caller(request))
             return send_request(request, response)
-    
+
     ai_message(
         await caller(request),
         f"<Address correct: {correct}. Reasoning: {reasoning}>",
@@ -807,7 +796,7 @@ async def add_locksmith_contacts(request: Request):
     clear_caller_queue(await caller(request))
     first_contact = get_job_info(await caller(request), "Anbieter") or "Andi"
     add_to_caller_queue(await caller(request), first_contact)
-    
+
     if first_contact.lower() not in ["tiberius", "marcel"]:
         add_to_caller_queue(await caller(request), "Jan")
         add_to_caller_queue(await caller(request), "Haas")

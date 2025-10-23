@@ -102,6 +102,7 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
         ort=ort,
     )
 
+
 if __name__ == "__main__":
     test_addresses = [
         "87527",

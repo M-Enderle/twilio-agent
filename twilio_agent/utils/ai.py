@@ -1,8 +1,15 @@
+import hashlib
+import json
 import logging
 import os
+import re
 import time
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import dotenv
+from openai import OpenAI
 from xai_sdk import Client
 from xai_sdk.chat import system, user
 
@@ -10,8 +17,90 @@ logger = logging.getLogger("uvicorn")
 
 dotenv.load_dotenv()
 
-# --- Initialize XAI Client ---
+# --- Initialize XAI Client (Grok) ---
 client = Client(api_key=os.environ["XAI_API_KEY"])
+
+# --- Initialize Baseten Client (GPT-OSS-120B) ---
+baseten_client = OpenAI(
+    api_key=os.environ.get("BASETEN_API_KEY", ""),
+    base_url="https://inference.baseten.co/v1",
+)
+
+# --- Cache System Setup ---
+CACHE_BASE_DIR = Path("./ai_cache")
+
+
+def _get_cache_dir(function_name: str) -> Path:
+    """Get or create cache directory for a specific function."""
+    cache_dir = CACHE_BASE_DIR / function_name
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _get_cache_key(input_data: dict) -> str:
+    """Generate a cache key from input data by sanitizing the first text value."""
+    # Extract the first value that looks like text (typically spoken_text or similar)
+    text_value = None
+    for key in sorted(input_data.keys()):  # Sort for consistency
+        value = input_data[key]
+        if isinstance(value, str):
+            text_value = value
+            break
+
+    if not text_value:
+        # Fallback to hash if no text found
+        data_str = json.dumps(input_data, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(data_str.encode()).hexdigest()
+
+    # Normalize unicode and remove accents/umlauts
+    # NFD decomposes characters like ä to a + diacritic, then we filter out diacritics
+    normalized = unicodedata.normalize("NFD", text_value)
+    without_accents = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+
+    # Replace spaces with underscores and remove all punctuation
+    sanitized = re.sub(r"[^a-zA-Z0-9_\s]", "", without_accents)  # Remove punctuation
+    sanitized = re.sub(r"\s+", "_", sanitized)  # Replace spaces with underscores
+    sanitized = re.sub(
+        r"_+", "_", sanitized
+    )  # Replace multiple underscores with single
+    sanitized = sanitized.strip(
+        "_"
+    ).lower()  # Remove leading/trailing underscores and lowercase
+
+    return sanitized
+
+
+def _get_cache(function_name: str, input_data: dict) -> dict | None:
+    """Retrieve cached result if it exists."""
+    cache_dir = _get_cache_dir(function_name)
+    cache_key = _get_cache_key(input_data)
+    cache_file = cache_dir / f"{cache_key}.json"
+
+    try:
+        if cache_file.exists():
+            logger.info(f"Hit cache for {function_name} with key {cache_key}")
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached_data = json.load(f)
+                logger.debug(f"Cache hit for {function_name} with key {cache_key}")
+                return cached_data
+    except Exception as e:
+        logger.warning(f"Error reading cache for {function_name}: {e}")
+
+    return None
+
+
+def _set_cache(function_name: str, input_data: dict, result: dict) -> None:
+    """Store result in cache."""
+    cache_dir = _get_cache_dir(function_name)
+    cache_key = _get_cache_key(input_data)
+    cache_file = cache_dir / f"{cache_key}.json"
+
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+            logger.debug(f"Cache stored for {function_name} with key {cache_key}")
+    except Exception as e:
+        logger.warning(f"Error writing cache for {function_name}: {e}")
 
 
 def _ask_grok(system_prompt: str, user_prompt: str) -> str:
@@ -30,6 +119,81 @@ def _ask_grok(system_prompt: str, user_prompt: str) -> str:
         return ""
 
 
+def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
+    """Make a request to GPT-OSS-120B via Baseten."""
+    if not baseten_client or not os.environ.get("BASETEN_API_KEY"):
+        logger.debug("Baseten client not configured.")
+        return ""
+    try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        response = baseten_client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=messages,
+            temperature=0,
+            max_tokens=1000,
+            top_p=1,
+            presence_penalty=0,
+            frequency_penalty=0,
+        )
+        if response.choices and response.choices[0].message:
+            return response.choices[0].message.content.strip()
+        return ""
+    except Exception as e:
+        logger.debug(f"Baseten API call failed: {e}")
+        return ""
+
+
+def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> str:
+    """
+    Request both Grok and Baseten LLMs in parallel.
+    Returns Grok's response if it completes within 1 second.
+    Otherwise, returns the response from whichever completes first.
+    Falls back to the other if one fails.
+    """
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        # Submit both requests
+        grok_future = executor.submit(_ask_grok, system_prompt, user_prompt)
+        baseten_future = executor.submit(_ask_baseten, system_prompt, user_prompt)
+
+        start_time = time.time()
+        grok_response = None
+        baseten_response = None
+
+        # Wait for responses and track timing
+        for future in as_completed([grok_future, baseten_future]):
+            elapsed = time.time() - start_time
+
+            if future == grok_future:
+                grok_response = future.result()
+                logger.debug(f"Grok completed in {elapsed:.3f}s -> {grok_response}")
+                # If Grok is fast enough (< 1s), use it
+                if elapsed < 1.0 and grok_response:
+                    logger.info(f"Using Grok response (completed in {elapsed:.3f}s)")
+                    return grok_response
+            else:
+                baseten_response = future.result()
+                logger.debug(
+                    f"Baseten completed in {elapsed:.3f}s -> {baseten_response}"
+                )
+
+        # If Grok took > 1s, prefer Baseten if it returned something
+        if baseten_response:
+            logger.info("Grok took > 1s, using Baseten response")
+            return baseten_response
+
+        # Fallback to Grok if Baseten failed
+        if grok_response:
+            logger.info("Baseten failed, using Grok response")
+            return grok_response
+
+        # Both failed
+        logger.error("Both LLM requests failed")
+        return ""
+
+
 def classify_intent(spoken_text: str) -> tuple[str, str, float]:
     """
     Classifies the user's intent into a predefined set of categories.
@@ -41,6 +205,13 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
 
     if not spoken_text:
         return fallback, "Kein Text vorhanden.", -1.0
+
+    # Check cache first
+    cache_input = {"spoken_text": spoken_text}
+    cached_result = _get_cache("classify_intent", cache_input)
+    if cached_result:
+        logger.info(f"Returning cached result for classify_intent")
+        return cached_result["classification"], cached_result["reasoning"], 0.0
 
     try:
         choices_str = "', '".join(choices)
@@ -88,7 +259,7 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
     """
         user_prompt = f'Kategorisiere diese Anfrage: "{spoken_text}"'
 
-        response = _ask_grok(system_prompt, user_prompt).strip()
+        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
         if "->" in response:
             reasoning, classification = response.split("->", 1)
             classification = classification.strip().lower()
@@ -103,6 +274,14 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
 
         duration = time.time() - start_time
         logger.info(f"Classification completed in {duration:.3f}s. Result: {result}")
+
+        # Cache the result
+        _set_cache(
+            "classify_intent",
+            cache_input,
+            {"classification": result, "reasoning": reasoning},
+        )
+
         return result, reasoning, duration
 
     except Exception as e:
@@ -119,6 +298,13 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
     start_time = time.time()
     if not spoken_text:
         return False, "Kein Text vorhanden.", 0.0
+
+    # Check cache first
+    cache_input = {"spoken_text": spoken_text, "context": context}
+    cached_result = _get_cache("yes_no_question", cache_input)
+    if cached_result:
+        logger.info(f"Returning cached result for yes_no_question")
+        return cached_result["is_agreement"], cached_result["reasoning"], 0.0
 
     try:
         system_prompt = """
@@ -144,7 +330,7 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
     """
         user_prompt = f'Kontext: "{context}" \nAntwort des Benutzers: "{spoken_text}". Zeigt dies eine bejahende Absicht?'
 
-        response = _ask_grok(system_prompt, user_prompt).strip()
+        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
         if "->" in response:
             reasoning, decision = response.split("->", 1)
             decision = decision.strip()
@@ -159,6 +345,14 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
         logger.info(
             f"Yes/No question completed in {duration:.3f}s. Result: {is_agreement}"
         )
+
+        # Cache the result
+        _set_cache(
+            "yes_no_question",
+            cache_input,
+            {"is_agreement": is_agreement, "reasoning": reasoning},
+        )
+
         return is_agreement, reasoning, duration
 
     except Exception as e:
@@ -175,6 +369,13 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float]:
     start_time = time.time()
     if not spoken_text:
         return False, "Kein Text vorhanden.", 0.0
+
+    # Check cache first
+    cache_input = {"spoken_text": spoken_text}
+    cached_result = _get_cache("contains_location", cache_input)
+    if cached_result:
+        logger.info(f"Returning cached result for contains_location")
+        return cached_result["contains_loc"], cached_result["reasoning"], 0.0
 
     try:
         system_prompt = """
@@ -200,7 +401,7 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float]:
     """
         user_prompt = f'Text: "{spoken_text}"'
 
-        response = _ask_grok(system_prompt, user_prompt).strip()
+        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
         if "->" in response:
             reasoning, decision = response.split("->", 1)
             decision = decision.strip()
@@ -215,6 +416,14 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float]:
         logger.info(
             f"Location presence check completed in {duration:.3f}s. Result: {contains_loc}"
         )
+
+        # Cache the result
+        _set_cache(
+            "contains_location",
+            cache_input,
+            {"contains_loc": contains_loc, "reasoning": reasoning},
+        )
+
         return contains_loc, reasoning, duration
 
     except Exception as e:
@@ -229,6 +438,13 @@ def extract_location(spoken_text: str) -> tuple[str, str, float]:
     Returns (address, reasoning, duration)
     """
     start_time = time.time()
+
+    # Check cache first
+    cache_input = {"spoken_text": spoken_text}
+    cached_result = _get_cache("extract_location", cache_input)
+    if cached_result:
+        logger.info(f"Returning cached result for extract_location")
+        return cached_result["address"], cached_result["reasoning"], 0.0
 
     try:
         system_prompt = """
@@ -252,9 +468,18 @@ def extract_location(spoken_text: str) -> tuple[str, str, float]:
     """
         user_prompt = f'Text: "{spoken_text}"'
 
-        response = _ask_grok(system_prompt, user_prompt).strip()
+        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
         address = response if response and response != "Keine Adresse" else None
-        return address, "Extraktion abgeschlossen.", time.time() - start_time
+        duration = time.time() - start_time
+
+        # Cache the result
+        _set_cache(
+            "extract_location",
+            cache_input,
+            {"address": address, "reasoning": "Extraktion abgeschlossen."},
+        )
+
+        return address, "Extraktion abgeschlossen.", duration
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error in extract_location after {duration:.3f}s: {e}")

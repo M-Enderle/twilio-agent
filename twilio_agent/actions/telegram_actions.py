@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from datetime import datetime
 
@@ -7,8 +8,6 @@ import pytz
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from twilio_agent.actions.redis_actions import get_call_timestamp
-import logging
-
 
 logger = logging.getLogger("uvicorn")
 

@@ -35,6 +35,7 @@ FROM base AS production
 # Create non-root user and prepare directories
 RUN useradd -m -u 10001 appuser \
     && mkdir -p /app/logs \
+    && mkdir -p /app/ai_cache \
     && chown -R appuser:appuser /app
 
 # Copy site-packages and deps layer
