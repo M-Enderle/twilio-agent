@@ -169,8 +169,8 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> str:
             if future == grok_future:
                 grok_response = future.result()
                 logger.debug(f"Grok completed in {elapsed:.3f}s -> {grok_response}")
-                # If Grok is fast enough (< 1s), use it
-                if elapsed < 1.0 and grok_response:
+                # If Grok is fast enough (< 0.6s), use it
+                if elapsed < 0.6 and grok_response:
                     logger.info(f"Using Grok response (completed in {elapsed:.3f}s)")
                     return grok_response
             else:
@@ -179,7 +179,7 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> str:
                     f"Baseten completed in {elapsed:.3f}s -> {baseten_response}"
                 )
 
-        # If Grok took > 1s, prefer Baseten if it returned something
+        # If Grok took > 0.6s, prefer Baseten if it returned something
         if baseten_response:
             logger.info("Grok took > 1s, using Baseten response")
             return baseten_response
