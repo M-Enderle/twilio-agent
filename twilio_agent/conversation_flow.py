@@ -185,7 +185,7 @@ async def parse_intent_1(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
     try:
-        classification, reasoning, duration = await asyncio.wait_for(
+        classification, reasoning, duration, model_source = await asyncio.wait_for(
             asyncio.to_thread(classify_intent, speech_result), timeout=6.0
         )
     except asyncio.TimeoutError:
@@ -200,6 +200,7 @@ async def parse_intent_1(request: Request):
         await caller(request),
         f"<Request classified as {classification}. Reasoning: {reasoning}>",
         duration,
+        model_source,
     )
     match classification:
         case "schlüsseldienst":
@@ -260,7 +261,7 @@ async def parse_intent_2(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
     try:
-        classification, reasoning, duration = await asyncio.wait_for(
+        classification, reasoning, duration, model_source = await asyncio.wait_for(
             asyncio.to_thread(classify_intent, speech_result), timeout=6.0
         )
     except asyncio.TimeoutError:
@@ -275,6 +276,7 @@ async def parse_intent_2(request: Request):
         await caller(request),
         f"<Request classified as {classification}. Reasoning: {reasoning}>",
         duration,
+        model_source,
     )
     match classification:
         case "schlüsseldienst":
@@ -354,13 +356,14 @@ async def parse_address_query_unified(request: Request):
         return await ask_send_sms_unified(request)
 
     try:
-        is_location, reasoning, time = await asyncio.wait_for(
+        is_location, reasoning, time, model_source = await asyncio.wait_for(
             asyncio.to_thread(contains_location, speech_result), timeout=6.0
         )
         ai_message(
             await caller(request),
             f"<Contains location: {is_location}. Reasoning: {reasoning}>",
             time,
+            model_source,
         )
     except asyncio.TimeoutError:
         ai_message(await caller(request), "<Request timed out>", 6.0)
@@ -373,7 +376,7 @@ async def parse_address_query_unified(request: Request):
 
     if not location:
         try:
-            ai_result, reasoning, duration = await asyncio.wait_for(
+            ai_result, reasoning, duration, model_source = await asyncio.wait_for(
                 asyncio.to_thread(extract_location, speech_result), timeout=6.0
             )
         except asyncio.TimeoutError:
@@ -388,6 +391,7 @@ async def parse_address_query_unified(request: Request):
             await caller(request),
             f"<AI location extraction: {ai_result}. Reasoning: {reasoning}>",
             duration,
+            model_source,
         )
 
         # Try to parse the address they named
@@ -558,7 +562,7 @@ async def parse_location_correct_unified(request: Request):
     user_message(await caller(request), speech_result)
 
     try:
-        correct, reasoning, duration = await asyncio.wait_for(
+        correct, reasoning, duration, model_source = await asyncio.wait_for(
             asyncio.to_thread(
                 yes_no_question,
                 speech_result,
@@ -579,6 +583,7 @@ async def parse_location_correct_unified(request: Request):
         await caller(request),
         f"<Address correct: {correct}. Reasoning: {reasoning}>",
         duration,
+        model_source,
     )
 
     with new_response() as response:
@@ -638,7 +643,7 @@ async def parse_send_sms_unified(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
     try:
-        send_sms_request, reasoning, duration = await asyncio.wait_for(
+        send_sms_request, reasoning, duration, model_source = await asyncio.wait_for(
             asyncio.to_thread(
                 yes_no_question,
                 speech_result,
@@ -658,6 +663,7 @@ async def parse_send_sms_unified(request: Request):
         await caller(request),
         f"<Send SMS request: {send_sms_request}. Reasoning: {reasoning}>",
         duration,
+        model_source,
     )
     if send_sms_request:
         save_job_info(await caller(request), "SMS mit Link angefordert", "Ja")
@@ -758,7 +764,7 @@ async def parse_connection_request_unified(request: Request):
     speech_result = form_data.get("SpeechResult", "")
     user_message(await caller(request), speech_result)
     try:
-        connection_request, reasoning, duration = await asyncio.wait_for(
+        connection_request, reasoning, duration, model_source = await asyncio.wait_for(
             asyncio.to_thread(
                 yes_no_question,
                 speech_result,
@@ -778,6 +784,7 @@ async def parse_connection_request_unified(request: Request):
         await caller(request),
         f"<Connection request: {connection_request}. Reasoning: {reasoning}>",
         duration,
+        model_source,
     )
     if connection_request:
         save_job_info(await caller(request), "Weiterleitung angefordert", "Ja")

@@ -72,13 +72,15 @@ async def websocket_details(websocket: WebSocket, number: str, timestamp: str):
                     raw_role = str(entry.get("role", "assistant"))
                     role_class = raw_role.lower().replace(" ", "-")
                     content = entry.get("content", "")
-                    messages.append(
-                        {
-                            "role": raw_role,
-                            "role_class": role_class,
-                            "content": content,
-                        }
-                    )
+                    model = entry.get("model")
+                    message_dict = {
+                        "role": raw_role,
+                        "role_class": role_class,
+                        "content": content,
+                    }
+                    if model:
+                        message_dict["model"] = model
+                    messages.append(message_dict)
 
                 # Check for recordings (initial + follow-up)
                 recordings_raw = get_available_recordings(number, timestamp) or {}

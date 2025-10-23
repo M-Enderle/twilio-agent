@@ -109,12 +109,12 @@ def user_message(call_number: str, message: str):
     logger.info("User message: %s", message)
 
 
-def ai_message(call_number: str, message: str, duration: float = None):
+def ai_message(call_number: str, message: str, duration: float = None, model_source: str = None):
     if duration is not None:
         message_with_timing = f"{message} (took {duration:.3f}s)"
     else:
         message_with_timing = message
-    _save_message(call_number, message_with_timing, "AI")
+    _save_message(call_number, message_with_timing, "AI", model_source)
     logger.info("AI: %s", message_with_timing)
 
 
@@ -132,7 +132,7 @@ def twilio_message(call_number: str, message: str):
     logger.info("Twilio: %s", message)
 
 
-def _save_message(call_number: str, message: str, role: str):
+def _save_message(call_number: str, message: str, role: str, model_source: str = None):
     start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
     if not start_time:
         return
@@ -145,7 +145,11 @@ def _save_message(call_number: str, message: str, role: str):
     else:
         messages = []
 
-    messages.append({"role": role, "content": message})
+    message_entry = {"role": role, "content": message}
+    if model_source:
+        message_entry["model"] = model_source
+
+    messages.append(message_entry)
 
     redis.set(
         key,

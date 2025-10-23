@@ -257,11 +257,31 @@
       border-bottom-left-radius: 6px;
     }
 
-    .message.grok .message-bubble,
-    .message.ai .message-bubble {
+    .message.grok .message-bubble {
       background: #ede9fe;
       color: #2d2d2d;
       border-left: 4px solid #a855f7;
+      border-bottom-left-radius: 6px;
+    }
+
+    .message.gpt .message-bubble {
+      background: #f0fdf4;
+      color: #14532d;
+      border-left: 4px solid #16a34a;
+      border-bottom-left-radius: 6px;
+    }
+
+    .message.cache .message-bubble {
+      background: #fefce8;
+      color: #92400e;
+      border-left: 4px solid #eab308;
+      border-bottom-left-radius: 6px;
+    }
+
+    .message.ai .message-bubble {
+      background: #f3f4f6;
+      color: #374151;
+      border-left: 4px solid #9ca3af;
       border-bottom-left-radius: 6px;
     }
 
@@ -705,11 +725,23 @@
         transcriptSection.style.display = 'block';
         
         messages.forEach(message => {
+          console.log(message)
           const messageDiv = document.createElement('div');
-          const roleClass = message.role_class || (message.role ? message.role.toLowerCase() : 'assistant');
+          let roleClass = message.role_class || (message.role ? message.role.toLowerCase() : 'assistant');
+          
+          // If this is an AI message with a model source, use the model as the class
+          if (message.role === 'AI' && message.model) {
+            roleClass = message.model.toLowerCase();
+          }
+          
           messageDiv.className = `message ${roleClass}`;
           if (message.role) {
-            messageDiv.setAttribute('data-role', message.role);
+            // For AI messages, show the model name instead of just "AI"
+            let displayRole = message.role;
+            if (message.role === 'AI' && message.model) {
+              displayRole = message.model.toUpperCase();
+            }
+            messageDiv.setAttribute('data-role', displayRole);
           }
           
           const bubble = document.createElement('div');
@@ -749,7 +781,6 @@
 
       
       if (key === 'Standort' && value) {
-        console.log('Formatting Standort:', value);
         // Handle object location data
         if (typeof value === 'object' && value !== null) {
           const address = value.formatted_address ? value.formatted_address : value.google_maps_link;

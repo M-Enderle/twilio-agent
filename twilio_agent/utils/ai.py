@@ -146,11 +146,12 @@ def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
         return ""
 
 
-def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> str:
+def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     """
     Request both Grok and Baseten LLMs in parallel.
-    Returns Grok's response if it completes within 1 second.
-    Otherwise, returns the response from whichever completes first.
+    Returns (response, model_source) where model_source is "grok" or "gpt".
+    Uses Grok if it completes within 1 second.
+    Otherwise, uses whichever completes first.
     Falls back to the other if one fails.
     """
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -172,7 +173,7 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> str:
                 # If Grok is fast enough (< 1s), use it
                 if elapsed < 1.0 and grok_response:
                     logger.info(f"Using Grok response (completed in {elapsed:.3f}s)")
-                    return grok_response
+                    return grok_response, "grok"
             else:
                 baseten_response = future.result()
                 logger.debug(
@@ -182,36 +183,36 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> str:
         # If Grok took > 1s, prefer Baseten if it returned something
         if baseten_response:
             logger.info("Grok took > 1s, using Baseten response")
-            return baseten_response
+            return baseten_response, "gpt"
 
         # Fallback to Grok if Baseten failed
         if grok_response:
             logger.info("Baseten failed, using Grok response")
-            return grok_response
+            return grok_response, "grok"
 
         # Both failed
         logger.error("Both LLM requests failed")
-        return ""
+        return "", "unknown"
 
 
-def classify_intent(spoken_text: str) -> tuple[str, str, float]:
+def classify_intent(spoken_text: str) -> tuple[str, str, float, str]:
     """
     Classifies the user's intent into a predefined set of categories.
-    Returns (classification, reasoning, duration)
+    Returns (classification, reasoning, duration, model_source)
     """
     start_time = time.time()
     choices = ["schlüsseldienst", "abschleppdienst", "adac", "mitarbeiter", "andere"]
     fallback = "andere"
 
     if not spoken_text:
-        return fallback, "Kein Text vorhanden.", -1.0
+        return fallback, "Kein Text vorhanden.", -1.0, "cache"
 
     # Check cache first
     cache_input = {"spoken_text": spoken_text}
     cached_result = _get_cache("classify_intent", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for classify_intent")
-        return cached_result["classification"], cached_result["reasoning"], 0.0
+        return cached_result["classification"], cached_result["reasoning"], 0.0, "cache"
 
     try:
         choices_str = "', '".join(choices)
@@ -259,7 +260,8 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
     """
         user_prompt = f'Kategorisiere diese Anfrage: "{spoken_text}"'
 
-        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
+        response, model_source = _ask_llm_parallel(system_prompt, user_prompt)
+        response = response.strip()
         if "->" in response:
             reasoning, classification = response.split("->", 1)
             classification = classification.strip().lower()
@@ -273,7 +275,7 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
             reasoning = f"Unerwartete Klassifizierung '{classification}', fallback zu '{result}'. Ursprüngliche Begründung: {reasoning}"
 
         duration = time.time() - start_time
-        logger.info(f"Classification completed in {duration:.3f}s. Result: {result}")
+        logger.info(f"Classification completed in {duration:.3f}s. Result: {result}. Model: {model_source}")
 
         # Cache the result
         _set_cache(
@@ -282,29 +284,29 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float]:
             {"classification": result, "reasoning": reasoning},
         )
 
-        return result, reasoning, duration
+        return result, reasoning, duration, model_source
 
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error in classify_intent after {duration:.3f}s: {e}")
-        return fallback, f"Fehler: {e}", duration
+        return fallback, f"Fehler: {e}", duration, "unknown"
 
 
-def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
+def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float, str]:
     """
     Determines if spoken text represents clear agreement (Yes) or not (No).
-    Returns (is_agreement, reasoning, duration)
+    Returns (is_agreement, reasoning, duration, model_source)
     """
     start_time = time.time()
     if not spoken_text:
-        return False, "Kein Text vorhanden.", 0.0
+        return False, "Kein Text vorhanden.", 0.0, "cache"
 
     # Check cache first
     cache_input = {"spoken_text": spoken_text, "context": context}
     cached_result = _get_cache("yes_no_question", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for yes_no_question")
-        return cached_result["is_agreement"], cached_result["reasoning"], 0.0
+        return cached_result["is_agreement"], cached_result["reasoning"], 0.0, "cache"
 
     try:
         system_prompt = """
@@ -330,7 +332,8 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
     """
         user_prompt = f'Kontext: "{context}" \nAntwort des Benutzers: "{spoken_text}". Zeigt dies eine bejahende Absicht?'
 
-        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
+        response, model_source = _ask_llm_parallel(system_prompt, user_prompt)
+        response = response.strip()
         if "->" in response:
             reasoning, decision = response.split("->", 1)
             decision = decision.strip()
@@ -343,7 +346,7 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
         duration = time.time() - start_time
 
         logger.info(
-            f"Yes/No question completed in {duration:.3f}s. Result: {is_agreement}"
+            f"Yes/No question completed in {duration:.3f}s. Result: {is_agreement}. Model: {model_source}"
         )
 
         # Cache the result
@@ -353,29 +356,29 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float]:
             {"is_agreement": is_agreement, "reasoning": reasoning},
         )
 
-        return is_agreement, reasoning, duration
+        return is_agreement, reasoning, duration, model_source
 
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error in yes_no_question after {duration:.3f}s: {e}")
-        return False, f"Fehler: {e}", duration
+        return False, f"Fehler: {e}", duration, "unknown"
 
 
-def contains_location(spoken_text: str) -> tuple[bool, str, float]:
+def contains_location(spoken_text: str) -> tuple[bool, str, float, str]:
     """
     Determines if spoken text contains any kind of location information.
-    Returns True if location info is present, else False.
+    Returns (contains_location, reasoning, duration, model_source)
     """
     start_time = time.time()
     if not spoken_text:
-        return False, "Kein Text vorhanden.", 0.0
+        return False, "Kein Text vorhanden.", 0.0, "cache"
 
     # Check cache first
     cache_input = {"spoken_text": spoken_text}
     cached_result = _get_cache("contains_location", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for contains_location")
-        return cached_result["contains_loc"], cached_result["reasoning"], 0.0
+        return cached_result["contains_loc"], cached_result["reasoning"], 0.0, "cache"
 
     try:
         system_prompt = """
@@ -401,7 +404,8 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float]:
     """
         user_prompt = f'Text: "{spoken_text}"'
 
-        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
+        response, model_source = _ask_llm_parallel(system_prompt, user_prompt)
+        response = response.strip()
         if "->" in response:
             reasoning, decision = response.split("->", 1)
             decision = decision.strip()
@@ -414,7 +418,7 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float]:
         duration = time.time() - start_time
 
         logger.info(
-            f"Location presence check completed in {duration:.3f}s. Result: {contains_loc}"
+            f"Location presence check completed in {duration:.3f}s. Result: {contains_loc}. Model: {model_source}"
         )
 
         # Cache the result
@@ -424,18 +428,18 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float]:
             {"contains_loc": contains_loc, "reasoning": reasoning},
         )
 
-        return contains_loc, reasoning, duration
+        return contains_loc, reasoning, duration, model_source
 
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error in contains_location after {duration:.3f}s: {e}")
-        return False, f"Fehler: {e}", duration
+        return False, f"Fehler: {e}", duration, "unknown"
 
 
-def extract_location(spoken_text: str) -> tuple[str, str, float]:
+def extract_location(spoken_text: str) -> tuple[str, str, float, str]:
     """
     Extracts only the address part from spoken text.
-    Returns (address, reasoning, duration)
+    Returns (address, reasoning, duration, model_source)
     """
     start_time = time.time()
 
@@ -444,7 +448,7 @@ def extract_location(spoken_text: str) -> tuple[str, str, float]:
     cached_result = _get_cache("extract_location", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for extract_location")
-        return cached_result["address"], cached_result["reasoning"], 0.0
+        return cached_result["address"], cached_result["reasoning"], 0.0, "cache"
 
     try:
         system_prompt = """
@@ -468,9 +472,12 @@ def extract_location(spoken_text: str) -> tuple[str, str, float]:
     """
         user_prompt = f'Text: "{spoken_text}"'
 
-        response = _ask_llm_parallel(system_prompt, user_prompt).strip()
+        response, model_source = _ask_llm_parallel(system_prompt, user_prompt)
+        response = response.strip()
         address = response if response and response != "Keine Adresse" else None
         duration = time.time() - start_time
+
+        logger.info(f"Location extraction completed in {duration:.3f}s. Model: {model_source}")
 
         # Cache the result
         _set_cache(
@@ -479,11 +486,11 @@ def extract_location(spoken_text: str) -> tuple[str, str, float]:
             {"address": address, "reasoning": "Extraktion abgeschlossen."},
         )
 
-        return address, "Extraktion abgeschlossen.", duration
+        return address, "Extraktion abgeschlossen.", duration, model_source
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error in extract_location after {duration:.3f}s: {e}")
-        return None, f"Fehler: {e}", duration
+        return None, f"Fehler: {e}", duration, "unknown"
 
 
 if __name__ == "__main__":
