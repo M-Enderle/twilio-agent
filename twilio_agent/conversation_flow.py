@@ -694,28 +694,30 @@ async def calculate_cost_unified(request: Request):
     intent = get_intent(await caller(request), True)
     location = get_location(await caller(request))
 
-    if intent == "schlüsseldienst":
-        try:
-            longitude = float(location["longitude"])
-            latitude = float(location["latitude"])
-        except (KeyError, TypeError, ValueError) as exc:
-            ai_message(
-                await caller(request),
-                f"<Locksmith pricing failed: missing coordinates ({exc})>",
-            )
-            with new_response() as response:
-                message = "Ich verbinde dich mit einem Mitarbeiter."
-                say(response, message)
-                agent_message(await caller(request), message)
-                start_transfer(response, await caller(request))
-                return send_request(request, response)
+    try:
+        longitude = float(location["longitude"])
+        latitude = float(location["latitude"])
+    except (KeyError, TypeError, ValueError) as exc:
+        ai_message(
+            await caller(request),
+            f"<Locksmith pricing failed: missing coordinates ({exc})>",
+        )
+        with new_response() as response:
+            message = "Ich verbinde dich mit einem Mitarbeiter."
+            say(response, message)
+            agent_message(await caller(request), message)
+            start_transfer(response, await caller(request))
+            return send_request(request, response)
 
-        price, duration, provider, phone = get_price_locksmith(longitude, latitude)
+    if intent == "schlüsseldienst":
+        price, duration, provider, _ = get_price_locksmith(longitude, latitude)
         save_job_info(await caller(request), "Anbieter", provider)
         await add_locksmith_contacts(request)
 
     else:  # abschleppdienst
-        price, duration, provider, phone = get_price_towing(location)
+        price, duration, provider, _ = get_price_towing(longitude, latitude)
+        save_job_info(await caller(request), "Anbieter", provider)
+        await add_towing_contacts(request)
 
     german_keys = {
         "price": "Preis",
