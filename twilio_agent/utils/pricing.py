@@ -68,8 +68,6 @@ def _closest_provider(origin: routing_v2.Waypoint, intent: str):
                         ("x-goog-fieldmask", "routes.distanceMeters,routes.duration")
                     ],
                 )
-                print(response)
-                print(origin)
                 if not response.routes:
                     continue
                 route = response.routes[0]

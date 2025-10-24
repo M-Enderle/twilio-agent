@@ -504,7 +504,7 @@ async def parse_plz_unified(request: Request):
         logger.info(f"Digits: {result}")
     elif speech:
         result = str(speech)
-        re_identifier = "(?<=\b\d)\s(?=\d(?: \d){2,3}\b)|(?<=\b\d \d)\s(?=\d(?: \d){1,2}\b)|(?<=\b\d(?: \d){2})\s(?=\d(?: \d)?\b)|(?<=\b\d(?: \d){3})\s(?=\d\b)"
+        re_identifier = r'(?<=\b\d\b)\s+(?=\b\d\b)'
         result = re.sub(re_identifier, "", result)
         logger.info(f"Speech: {result}")
     else:
