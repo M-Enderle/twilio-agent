@@ -21,7 +21,7 @@ from twilio_agent.actions.redis_actions import (agent_message, delete_job_info,
                                                 save_location)
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.pricing import (get_price_locksmith,
-                                        get_price_towing_coordinates)
+                                        get_price_towing)
 
 contact_manager = ContactManager()
 
@@ -135,7 +135,7 @@ def outbound_call_after_sms(to: str):
         pricing_args = (longitude_float, latitude_float)
     else:
         service_name = "Abschleppdienst"
-        pricing_fn = get_price_towing_coordinates
+        pricing_fn = get_price_towing
         pricing_args = (longitude_float, latitude_float)
 
     try:
