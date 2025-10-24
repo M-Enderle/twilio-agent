@@ -710,12 +710,12 @@ async def calculate_cost_unified(request: Request):
             return send_request(request, response)
 
     if intent == "schlüsseldienst":
-        price, duration, provider, _ = get_price_locksmith(longitude, latitude)
+        price, duration, provider, phone = get_price_locksmith(longitude, latitude)
         save_job_info(await caller(request), "Anbieter", provider)
         await add_locksmith_contacts(request)
 
     else:  # abschleppdienst
-        price, duration, provider, _ = get_price_towing(longitude, latitude)
+        price, duration, provider, phone = get_price_towing(longitude, latitude)
         save_job_info(await caller(request), "Anbieter", provider)
         await add_towing_contacts(request)
 
