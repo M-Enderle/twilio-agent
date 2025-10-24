@@ -182,6 +182,8 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     Otherwise, uses whichever completes first.
     Falls back to the other if one fails.
     """
+    from concurrent.futures import TimeoutError
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         # Submit both requests
         grok_future = executor.submit(_ask_grok, system_prompt, user_prompt)
@@ -191,34 +193,43 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
         grok_response = None
         baseten_response = None
 
-        # Wait for responses and track timing
-        for future in as_completed([grok_future, baseten_future]):
+        try:
+            # Wait for Grok, maximum 1 second
+            grok_response = grok_future.result(timeout=1)
             elapsed = time.time() - start_time
+            logger.debug(f"Grok completed in {elapsed:.3f}s -> {grok_response}")
+            if grok_response:
+                logger.info(f"Using Grok response (completed in {elapsed:.3f}s)")
+                return grok_response, "grok"
+        except TimeoutError:
+            logger.info("Grok did not finish in 1 second. Checking Baseten.")
+        
+        # Try to get Baseten result if not already done
+        if baseten_future.done():
+            baseten_response = baseten_future.result()
+        else:
+            try:
+                # Doesn't matter how long it takes now, wait for whichever is faster
+                baseten_response = baseten_future.result(timeout=0)
+            except TimeoutError:
+                # Neither finished instantly; wait for the first one done
+                done_futures = list(as_completed([grok_future, baseten_future], timeout=10))
+                for future in done_futures:
+                    if future == baseten_future and baseten_response is None:
+                        baseten_response = future.result()
+                        break
+                    elif future == grok_future and grok_response is None:
+                        grok_response = future.result()
+                        break
 
-            if future == grok_future:
-                grok_response = future.result()
-                logger.debug(f"Grok completed in {elapsed:.3f}s -> {grok_response}")
-                # If Grok is fast enough (< 1s), use it
-                if elapsed < 1.0 and grok_response:
-                    logger.info(f"Using Grok response (completed in {elapsed:.3f}s)")
-                    return grok_response, "grok"
-            else:
-                baseten_response = future.result()
-                logger.debug(
-                    f"Baseten completed in {elapsed:.3f}s -> {baseten_response}"
-                )
-
-        # If Grok took > 1s, prefer Baseten if it returned something
         if baseten_response:
-            logger.info("Grok took > 1s, using Baseten response")
+            logger.info("Using Baseten response (Grok was too slow or empty)")
             return baseten_response, "gpt"
 
-        # Fallback to Grok if Baseten failed
         if grok_response:
             logger.info("Baseten failed, using Grok response")
             return grok_response, "grok"
 
-        # Both failed
         logger.error("Both LLM requests failed")
         return "", "unknown"
 
