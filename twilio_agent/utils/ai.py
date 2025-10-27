@@ -10,11 +10,13 @@ from pathlib import Path
 import cProfile
 import pstats
 import io
+import asyncio
 
 import dotenv
 from openai import OpenAI
 from xai_sdk import Client
 from xai_sdk.chat import system, user
+from concurrent.futures import TimeoutError
 
 # logger = logging.getLogger("uvicorn")
 logger = logging.getLogger(__name__)
@@ -214,7 +216,7 @@ def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
         return ""
 
 
-def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
+async def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     """
     Request both Grok and Baseten LLMs in parallel.
     Returns (response, model_source) where model_source is "grok" or "gpt".
@@ -222,65 +224,49 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     Otherwise, uses whichever completes first.
     Falls back to the other if one fails.
     """
-    from concurrent.futures import TimeoutError
 
-    step_start = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        # Submit both requests
-        grok_future = executor.submit(_ask_grok, system_prompt, user_prompt)
-        baseten_future = executor.submit(_ask_baseten, system_prompt, user_prompt)
+    start_time = time.time()
 
-        start_time = time.time()
-        grok_response = None
-        baseten_response = None
+    grok_task = asyncio.create_task(_ask_grok(system_prompt, user_prompt))
+    baseten_task = asyncio.create_task(_ask_baseten(system_prompt, user_prompt))
 
-        try:
-            # Wait for Grok, maximum 1 second
-            grok_response = grok_future.result(timeout=1)
+    try:
+        # Wait up to 1s for grok_task only
+        done, pending = await asyncio.wait([grok_task], timeout=1)
+        if done:
+            grok_result = await grok_task
             elapsed = time.time() - start_time
-            logger.debug(f"Grok completed in {elapsed:.3f}s -> {grok_response}")
-            if grok_response:
-                logger.info(f"Using Grok response (completed in {elapsed:.3f}s)")
-                duration = time.perf_counter() - step_start
-                logger.info(f"Step '_ask_llm_parallel' (grok success) completed in {duration:.3f}s")
-                return grok_response, "grok"
-        except TimeoutError:
-            logger.info("Grok did not finish in 1 second. Checking Baseten.")
-        
-        # Try to get Baseten result if not already done
-        if baseten_future.done():
-            baseten_response = baseten_future.result()
-        else:
+            # cancel Baseten, since Grok succeeded in time
+            baseten_task.cancel()
             try:
-                # Doesn't matter how long it takes now, wait for whichever is faster
-                baseten_response = baseten_future.result(timeout=0)
-            except TimeoutError:
-                # Neither finished instantly; wait for the first one done
-                done_futures = list(as_completed([grok_future, baseten_future], timeout=10))
-                for future in done_futures:
-                    if future == baseten_future and baseten_response is None:
-                        baseten_response = future.result()
-                        break
-                    elif future == grok_future and grok_response is None:
-                        grok_response = future.result()
-                        break
-
-        if baseten_response:
-            logger.info("Using Baseten response (Grok was too slow or empty)")
-            duration = time.perf_counter() - step_start
-            logger.info(f"Step '_ask_llm_parallel' (baseten success) completed in {duration:.3f}s")
-            return baseten_response, "gpt"
-
-        if grok_response:
-            logger.info("Baseten failed, using Grok response")
-            duration = time.perf_counter() - step_start
-            logger.info(f"Step '_ask_llm_parallel' (grok fallback) completed in {duration:.3f}s")
-            return grok_response, "grok"
-
-        logger.error("Both LLM requests failed")
-        duration = time.perf_counter() - step_start
-        logger.info(f"Step '_ask_llm_parallel' (failure) completed in {duration:.3f}s")
+                await baseten_task
+            except asyncio.CancelledError:
+                pass
+            return grok_result, "grok" if grok_result else ("", "unknown")
+        else:
+            # Grok didn't finish in 1s, now race both
+            done_both, pending_both = await asyncio.wait([grok_task, baseten_task], return_when=asyncio.FIRST_COMPLETED)
+            finished_task = done_both.pop()
+            resp = await finished_task
+            model_source = "grok" if finished_task == grok_task else "gpt"
+            # Cancel the other still running task
+            for task in pending_both:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            return resp, model_source if resp else ("", "unknown")
+    except Exception:
         return "", "unknown"
+    finally:
+        for task in [grok_task, baseten_task]:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
 
 def classify_intent(spoken_text: str) -> tuple[str, str, float, str]:
