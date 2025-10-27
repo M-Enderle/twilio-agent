@@ -7,13 +7,18 @@ import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import cProfile
+import pstats
+import io
 
 import dotenv
 from openai import OpenAI
 from xai_sdk import Client
 from xai_sdk.chat import system, user
 
-logger = logging.getLogger("uvicorn")
+# logger = logging.getLogger("uvicorn")
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 dotenv.load_dotenv()
 
@@ -37,9 +42,12 @@ def _get_cache_dir(function_name: str) -> Path:
     If creating the directory under CACHE_BASE_DIR is not permitted, fall back to
     using /tmp which should always be writable inside the container.
     """
+    step_start = time.perf_counter()
     primary_dir = CACHE_BASE_DIR / function_name
     try:
         primary_dir.mkdir(parents=True, exist_ok=True)
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_get_cache_dir' completed in {duration:.3f}s")
         return primary_dir
     except PermissionError as e:
         logger.warning(
@@ -54,17 +62,22 @@ def _get_cache_dir(function_name: str) -> Path:
     fallback_dir = fallback_base / function_name
     try:
         fallback_dir.mkdir(parents=True, exist_ok=True)
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_get_cache_dir' (fallback) completed in {duration:.3f}s")
         return fallback_dir
     except Exception as e:
         # As a last resort, return the primary path (calls will likely fail, but we log it)
         logger.error(
             f"Failed to create fallback cache dir '{fallback_dir}'. Continuing with primary path which may fail. Error: {e}"
         )
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_get_cache_dir' (error fallback) completed in {duration:.3f}s")
         return primary_dir
 
 
 def _get_cache_key(input_data: dict) -> str:
     """Generate a cache key from input data by sanitizing all text values."""
+    step_start = time.perf_counter()
     # Collect all text values from the input data
     text_values = []
     for key in sorted(input_data.keys()):  # Sort for consistency
@@ -75,31 +88,33 @@ def _get_cache_key(input_data: dict) -> str:
     if not text_values:
         # Fallback to hash if no text found
         data_str = json.dumps(input_data, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(data_str.encode()).hexdigest()
+        key = hashlib.sha256(data_str.encode()).hexdigest()
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_get_cache_key' (hash fallback) completed in {duration:.3f}s")
+        return key
 
     # Combine all text values with a separator
     combined_text = " | ".join(text_values)
 
-    # Normalize unicode and remove accents/umlauts
-    # NFD decomposes characters like ä to a + diacritic, then we filter out diacritics
+    # Normalize unicode and remove accents/umlauts (optimized: use str.translate for faster removal)
     normalized = unicodedata.normalize("NFD", combined_text)
-    without_accents = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+    trans_table = dict.fromkeys(c for c in range(128) if unicodedata.category(chr(c)) == "Mn")
+    without_accents = normalized.translate(trans_table)
 
-    # Replace spaces with underscores and remove all punctuation
-    sanitized = re.sub(r"[^a-zA-Z0-9_\s]", "", without_accents)  # Remove punctuation
-    sanitized = re.sub(r"\s+", "_", sanitized)  # Replace spaces with underscores
-    sanitized = re.sub(
-        r"_+", "_", sanitized
-    )  # Replace multiple underscores with single
-    sanitized = sanitized.strip(
-        "_"
-    ).lower()  # Remove leading/trailing underscores and lowercase
+    # Replace spaces with underscores and remove all punctuation (optimized: combine regex)
+    sanitized = re.sub(r"[^a-zA-Z0-9_ ]", "", without_accents)  # Remove punctuation (note: space instead of \s for speed)
+    sanitized = re.sub(r" +", "_", sanitized)  # Replace spaces with underscores
+    sanitized = re.sub(r"_+", "_", sanitized)  # Replace multiple underscores with single
+    sanitized = sanitized.strip("_").lower()  # Remove leading/trailing underscores and lowercase
 
+    duration = time.perf_counter() - step_start
+    logger.info(f"Step '_get_cache_key' completed in {duration:.3f}s")
     return sanitized
 
 
 def _get_cache(function_name: str, input_data: dict) -> dict | None:
     """Retrieve cached result if it exists."""
+    step_start = time.perf_counter()
     cache_dir = _get_cache_dir(function_name)
     cache_key = _get_cache_key(input_data)
     cache_file = cache_dir / f"{cache_key}.json"
@@ -110,15 +125,20 @@ def _get_cache(function_name: str, input_data: dict) -> dict | None:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached_data = json.load(f)
                 logger.debug(f"Cache hit for {function_name} with key {cache_key}")
+                duration = time.perf_counter() - step_start
+                logger.info(f"Step '_get_cache' (hit) completed in {duration:.3f}s")
                 return cached_data
     except Exception as e:
         logger.warning(f"Error reading cache for {function_name}: {e}")
 
+    duration = time.perf_counter() - step_start
+    logger.info(f"Step '_get_cache' (miss) completed in {duration:.3f}s")
     return None
 
 
 def _set_cache(function_name: str, input_data: dict, result: dict) -> None:
     """Store result in cache."""
+    step_start = time.perf_counter()
     cache_dir = _get_cache_dir(function_name)
     cache_key = _get_cache_key(input_data)
     cache_file = cache_dir / f"{cache_key}.json"
@@ -127,30 +147,44 @@ def _set_cache(function_name: str, input_data: dict, result: dict) -> None:
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
             logger.debug(f"Cache stored for {function_name} with key {cache_key}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_set_cache' completed in {duration:.3f}s")
     except Exception as e:
         logger.warning(f"Error writing cache for {function_name}: {e}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_set_cache' (error) completed in {duration:.3f}s")
 
 
 def _ask_grok(system_prompt: str, user_prompt: str) -> str:
     """Shared function for Grok API calls."""
+    step_start = time.perf_counter()
     if client is None:
         logger.error("Client not initialized. Returning empty response.")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_ask_grok' (uninitialized) completed in {duration:.3f}s")
         return ""
     try:
         chat = client.chat.create(model="grok-4-fast-non-reasoning", temperature=0)
         chat.append(system(system_prompt))
         chat.append(user(user_prompt))
         response_grok = chat.sample()
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_ask_grok' completed in {duration:.3f}s")
         return response_grok.content.strip()
     except Exception as e:
         logger.error(f"Grok API call failed: {e}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_ask_grok' (error) completed in {duration:.3f}s")
         return ""
 
 
 def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
     """Make a request to GPT-OSS-120B via Baseten."""
+    step_start = time.perf_counter()
     if not baseten_client or not os.environ.get("BASETEN_API_KEY"):
         logger.debug("Baseten client not configured.")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_ask_baseten' (unconfigured) completed in {duration:.3f}s")
         return ""
     try:
         messages = [
@@ -167,10 +201,16 @@ def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
             frequency_penalty=0,
         )
         if response.choices and response.choices[0].message:
+            duration = time.perf_counter() - step_start
+            logger.info(f"Step '_ask_baseten' completed in {duration:.3f}s")
             return response.choices[0].message.content.strip()
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_ask_baseten' (no response) completed in {duration:.3f}s")
         return ""
     except Exception as e:
         logger.debug(f"Baseten API call failed: {e}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_ask_baseten' (error) completed in {duration:.3f}s")
         return ""
 
 
@@ -184,6 +224,7 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     """
     from concurrent.futures import TimeoutError
 
+    step_start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as executor:
         # Submit both requests
         grok_future = executor.submit(_ask_grok, system_prompt, user_prompt)
@@ -200,6 +241,8 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
             logger.debug(f"Grok completed in {elapsed:.3f}s -> {grok_response}")
             if grok_response:
                 logger.info(f"Using Grok response (completed in {elapsed:.3f}s)")
+                duration = time.perf_counter() - step_start
+                logger.info(f"Step '_ask_llm_parallel' (grok success) completed in {duration:.3f}s")
                 return grok_response, "grok"
         except TimeoutError:
             logger.info("Grok did not finish in 1 second. Checking Baseten.")
@@ -224,13 +267,19 @@ def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
 
         if baseten_response:
             logger.info("Using Baseten response (Grok was too slow or empty)")
+            duration = time.perf_counter() - step_start
+            logger.info(f"Step '_ask_llm_parallel' (baseten success) completed in {duration:.3f}s")
             return baseten_response, "gpt"
 
         if grok_response:
             logger.info("Baseten failed, using Grok response")
+            duration = time.perf_counter() - step_start
+            logger.info(f"Step '_ask_llm_parallel' (grok fallback) completed in {duration:.3f}s")
             return grok_response, "grok"
 
         logger.error("Both LLM requests failed")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step '_ask_llm_parallel' (failure) completed in {duration:.3f}s")
         return "", "unknown"
 
 
@@ -240,10 +289,13 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float, str]:
     Returns (classification, reasoning, duration, model_source)
     """
     start_time = time.time()
+    step_start = time.perf_counter()
     choices = ["schlüsseldienst", "abschleppdienst", "adac", "mitarbeiter", "andere"]
     fallback = "andere"
 
     if not spoken_text:
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'classify_intent' (empty text) completed in {duration:.3f}s")
         return fallback, "Kein Text vorhanden.", -1.0, "cache"
 
     # Check cache first
@@ -251,6 +303,8 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float, str]:
     cached_result = _get_cache("classify_intent", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for classify_intent")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'classify_intent' (cache hit) completed in {duration:.3f}s")
         return cached_result["classification"], cached_result["reasoning"], 0.0, "cache"
 
     try:
@@ -313,8 +367,8 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float, str]:
         if result != classification:
             reasoning = f"Unerwartete Klassifizierung '{classification}', fallback zu '{result}'. Ursprüngliche Begründung: {reasoning}"
 
-        duration = time.time() - start_time
-        logger.info(f"Classification completed in {duration:.3f}s. Result: {result}. Model: {model_source}")
+        duration_total = time.time() - start_time
+        logger.info(f"Classification completed in {duration_total:.3f}s. Result: {result}. Model: {model_source}")
 
         # Cache the result
         _set_cache(
@@ -323,12 +377,16 @@ def classify_intent(spoken_text: str) -> tuple[str, str, float, str]:
             {"classification": result, "reasoning": reasoning},
         )
 
-        return result, reasoning, duration, model_source
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'classify_intent' completed in {duration:.3f}s")
+        return result, reasoning, duration_total, model_source
 
     except Exception as e:
-        duration = time.time() - start_time
-        logger.error(f"Error in classify_intent after {duration:.3f}s: {e}")
-        return fallback, f"Fehler: {e}", duration, "unknown"
+        duration_total = time.time() - start_time
+        logger.error(f"Error in classify_intent after {duration_total:.3f}s: {e}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'classify_intent' (error) completed in {duration:.3f}s")
+        return fallback, f"Fehler: {e}", duration_total, "unknown"
 
 
 def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float, str]:
@@ -337,7 +395,10 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float, s
     Returns (is_agreement, reasoning, duration, model_source)
     """
     start_time = time.time()
+    step_start = time.perf_counter()
     if not spoken_text:
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'yes_no_question' (empty text) completed in {duration:.3f}s")
         return False, "Kein Text vorhanden.", 0.0, "cache"
 
     # Check cache first
@@ -345,6 +406,8 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float, s
     cached_result = _get_cache("yes_no_question", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for yes_no_question")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'yes_no_question' (cache hit) completed in {duration:.3f}s")
         return cached_result["is_agreement"], cached_result["reasoning"], 0.0, "cache"
 
     try:
@@ -382,10 +445,10 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float, s
             reasoning = "Keine Begründung gegeben."
 
         is_agreement = decision == "Ja"
-        duration = time.time() - start_time
+        duration_total = time.time() - start_time
 
         logger.info(
-            f"Yes/No question completed in {duration:.3f}s. Result: {is_agreement}. Model: {model_source}"
+            f"Yes/No question completed in {duration_total:.3f}s. Result: {is_agreement}. Model: {model_source}"
         )
 
         # Cache the result
@@ -395,12 +458,16 @@ def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float, s
             {"is_agreement": is_agreement, "reasoning": reasoning},
         )
 
-        return is_agreement, reasoning, duration, model_source
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'yes_no_question' completed in {duration:.3f}s")
+        return is_agreement, reasoning, duration_total, model_source
 
     except Exception as e:
-        duration = time.time() - start_time
-        logger.error(f"Error in yes_no_question after {duration:.3f}s: {e}")
-        return False, f"Fehler: {e}", duration, "unknown"
+        duration_total = time.time() - start_time
+        logger.error(f"Error in yes_no_question after {duration_total:.3f}s: {e}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'yes_no_question' (error) completed in {duration:.3f}s")
+        return False, f"Fehler: {e}", duration_total, "unknown"
 
 
 def contains_location(spoken_text: str) -> tuple[bool, str, float, str]:
@@ -409,7 +476,10 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float, str]:
     Returns (contains_location, reasoning, duration, model_source)
     """
     start_time = time.time()
+    step_start = time.perf_counter()
     if not spoken_text:
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'contains_location' (empty text) completed in {duration:.3f}s")
         return False, "Kein Text vorhanden.", 0.0, "cache"
 
     # Check cache first
@@ -417,6 +487,8 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float, str]:
     cached_result = _get_cache("contains_location", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for contains_location")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'contains_location' (cache hit) completed in {duration:.3f}s")
         return cached_result["contains_loc"], cached_result["reasoning"], 0.0, "cache"
 
     try:
@@ -454,10 +526,10 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float, str]:
             reasoning = "Keine Begründung gegeben."
 
         contains_loc = decision == "Ja"
-        duration = time.time() - start_time
+        duration_total = time.time() - start_time
 
         logger.info(
-            f"Location presence check completed in {duration:.3f}s. Result: {contains_loc}. Model: {model_source}"
+            f"Location presence check completed in {duration_total:.3f}s. Result: {contains_loc}. Model: {model_source}"
         )
 
         # Cache the result
@@ -467,12 +539,16 @@ def contains_location(spoken_text: str) -> tuple[bool, str, float, str]:
             {"contains_loc": contains_loc, "reasoning": reasoning},
         )
 
-        return contains_loc, reasoning, duration, model_source
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'contains_location' completed in {duration:.3f}s")
+        return contains_loc, reasoning, duration_total, model_source
 
     except Exception as e:
-        duration = time.time() - start_time
-        logger.error(f"Error in contains_location after {duration:.3f}s: {e}")
-        return False, f"Fehler: {e}", duration, "unknown"
+        duration_total = time.time() - start_time
+        logger.error(f"Error in contains_location after {duration_total:.3f}s: {e}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'contains_location' (error) completed in {duration:.3f}s")
+        return False, f"Fehler: {e}", duration_total, "unknown"
 
 
 def extract_location(spoken_text: str) -> tuple[str, str, float, str]:
@@ -481,12 +557,15 @@ def extract_location(spoken_text: str) -> tuple[str, str, float, str]:
     Returns (address, reasoning, duration, model_source)
     """
     start_time = time.time()
+    step_start = time.perf_counter()
 
     # Check cache first
     cache_input = {"spoken_text": spoken_text}
     cached_result = _get_cache("extract_location", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for extract_location")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'extract_location' (cache hit) completed in {duration:.3f}s")
         return cached_result["address"], cached_result["reasoning"], 0.0, "cache"
 
     try:
@@ -514,9 +593,9 @@ def extract_location(spoken_text: str) -> tuple[str, str, float, str]:
         response, model_source = _ask_llm_parallel(system_prompt, user_prompt)
         response = response.strip()
         address = response if response and response != "Keine Adresse" else None
-        duration = time.time() - start_time
+        duration_total = time.time() - start_time
 
-        logger.info(f"Location extraction completed in {duration:.3f}s. Model: {model_source}")
+        logger.info(f"Location extraction completed in {duration_total:.3f}s. Model: {model_source}")
 
         # Cache the result
         _set_cache(
@@ -525,11 +604,28 @@ def extract_location(spoken_text: str) -> tuple[str, str, float, str]:
             {"address": address, "reasoning": "Extraktion abgeschlossen."},
         )
 
-        return address, "Extraktion abgeschlossen.", duration, model_source
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'extract_location' completed in {duration:.3f}s")
+        return address, "Extraktion abgeschlossen.", duration_total, model_source
     except Exception as e:
-        duration = time.time() - start_time
-        logger.error(f"Error in extract_location after {duration:.3f}s: {e}")
-        return None, f"Fehler: {e}", duration, "unknown"
+        duration_total = time.time() - start_time
+        logger.error(f"Error in extract_location after {duration_total:.3f}s: {e}")
+        duration = time.perf_counter() - step_start
+        logger.info(f"Step 'extract_location' (error) completed in {duration:.3f}s")
+        return None, f"Fehler: {e}", duration_total, "unknown"
+
+
+def profile_function(func, *args, **kwargs):
+    """Profile a function call using cProfile and log the stats."""
+    pr = cProfile.Profile()
+    pr.enable()
+    result = func(*args, **kwargs)
+    pr.disable()
+    s = io.StringIO()
+    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+    ps.print_stats(20)  # Print top 20 lines
+    logger.info(f"Profiling stats for {func.__name__}:\n{s.getvalue()}")
+    return result
 
 
 if __name__ == "__main__":
@@ -549,7 +645,7 @@ if __name__ == "__main__":
 
     print("Testing classify_intent:")
     for i, text in enumerate(test_cases_classify, 1):
-        result, reasoning, duration, model_source = classify_intent(text)
+        result, reasoning, duration, model_source = profile_function(classify_intent, text)
         print(
             f"Case {i}: '{text}' -> {result} (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
@@ -570,7 +666,7 @@ if __name__ == "__main__":
 
     print("\nTesting yes_no_question:")
     for i, (text, context) in enumerate(test_cases_yes_no, 1):
-        is_agreement, reasoning, duration, model_source = yes_no_question(text, context)
+        is_agreement, reasoning, duration, model_source = profile_function(yes_no_question, text, context)
         print(
             f"Case {i}: '{text}' in '{context}' -> {is_agreement} (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
@@ -591,7 +687,7 @@ if __name__ == "__main__":
 
     print("\nTesting extract_location:")
     for i, text in enumerate(test_cases_extract, 1):
-        address, reasoning, duration, model_source = extract_location(text)
+        address, reasoning, duration, model_source = profile_function(extract_location, text)
         print(
             f"Case {i}: '{text}' -> '{address}' (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
@@ -610,8 +706,8 @@ if __name__ == "__main__":
     ]
 
     print("\nTesting contains_location:")
-    for i, text in enumerate(test_cases_extract, 1):
-        has_location, reasoning, duration, model_source = contains_location(text)
+    for i, text in enumerate(test_cases_contains_location, 1):
+        has_location, reasoning, duration, model_source = profile_function(contains_location, text)
         print(
             f"Case {i}: '{text}' -> {has_location} (Reason: {reasoning}, Time: {duration:.3f}s) {model_source}"
         )
