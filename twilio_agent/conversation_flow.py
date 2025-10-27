@@ -186,7 +186,7 @@ async def parse_intent_1(request: Request):
     user_message(await caller(request), speech_result)
     try:
         classification, reasoning, duration, model_source = await asyncio.wait_for(
-            asyncio.to_thread(classify_intent, speech_result), timeout=6.0
+            classify_intent(speech_result), timeout=6.0
         )
     except asyncio.TimeoutError:
         ai_message(await caller(request), "<Request timed out>", 6.0)
@@ -262,7 +262,7 @@ async def parse_intent_2(request: Request):
     user_message(await caller(request), speech_result)
     try:
         classification, reasoning, duration, model_source = await asyncio.wait_for(
-            asyncio.to_thread(classify_intent, speech_result), timeout=6.0
+            classify_intent(speech_result), timeout=6.0
         )
     except asyncio.TimeoutError:
         ai_message(await caller(request), "<Request timed out>", 6.0)
@@ -356,13 +356,13 @@ async def parse_address_query_unified(request: Request):
         return await ask_send_sms_unified(request)
 
     try:
-        is_location, reasoning, time, model_source = await asyncio.wait_for(
-            asyncio.to_thread(contains_location, speech_result), timeout=6.0
+        is_location, reasoning, duration, model_source = await asyncio.wait_for(
+            contains_location(speech_result), timeout=6.0
         )
         ai_message(
             await caller(request),
             f"<Contains location: {is_location}. Reasoning: {reasoning}>",
-            time,
+            duration,
             model_source,
         )
     except asyncio.TimeoutError:
@@ -377,8 +377,8 @@ async def parse_address_query_unified(request: Request):
     if not location:
         try:
             ai_result, reasoning, duration, model_source = await asyncio.wait_for(
-                asyncio.to_thread(extract_location, speech_result), timeout=6.0
-            )
+                    extract_location(speech_result), timeout=6.0
+                )
         except asyncio.TimeoutError:
             ai_message(await caller(request), "<Request timed out>", 6.0)
             with new_response() as response:
@@ -563,8 +563,7 @@ async def parse_location_correct_unified(request: Request):
 
     try:
         correct, reasoning, duration, model_source = await asyncio.wait_for(
-            asyncio.to_thread(
-                yes_no_question,
+            yes_no_question(
                 speech_result,
                 "Der Kunde wurde gefragt ob die Adresse korrekt ist.",
             ),
@@ -644,8 +643,7 @@ async def parse_send_sms_unified(request: Request):
     user_message(await caller(request), speech_result)
     try:
         send_sms_request, reasoning, duration, model_source = await asyncio.wait_for(
-            asyncio.to_thread(
-                yes_no_question,
+            yes_no_question(
                 speech_result,
                 "Der Kunde wurde gefragt ob er eine SMS mit dem Link erhalten möchte.",
             ),
@@ -767,8 +765,7 @@ async def parse_connection_request_unified(request: Request):
     user_message(await caller(request), speech_result)
     try:
         connection_request, reasoning, duration, model_source = await asyncio.wait_for(
-            asyncio.to_thread(
-                yes_no_question,
+            yes_no_question(
                 speech_result,
                 "Der Kunde wurde gefragt ob er verbunden werden möchte.",
             ),
