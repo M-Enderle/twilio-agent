@@ -1,11 +1,6 @@
-import hashlib
-import json
+import asyncio
 import logging
 import os
-import re
-import unicodedata
-from pathlib import Path
-import asyncio
 import time
 
 import dotenv
@@ -13,9 +8,13 @@ from openai import OpenAI
 from xai_sdk import Client
 from xai_sdk.chat import system, user
 
+from twilio_agent.utils.cache import CacheManager
+
 # logger = logging.getLogger("uvicorn")
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 dotenv.load_dotenv()
 
@@ -28,105 +27,7 @@ baseten_client = OpenAI(
     base_url="https://inference.baseten.co/v1",
 )
 
-# --- Cache System Setup ---
-# Prefer absolute path inside container; fallback handled in _get_cache_dir
-CACHE_BASE_DIR = Path("/app/ai_cache") if os.path.isabs("/app/ai_cache") else Path("./ai_cache")
-
-
-def _get_cache_dir(function_name: str) -> Path:
-    """Get or create cache directory for a specific function, with fallback.
-
-    If creating the directory under CACHE_BASE_DIR is not permitted, fall back to
-    using /tmp which should always be writable inside the container.
-    """
-    primary_dir = CACHE_BASE_DIR / function_name
-    try:
-        primary_dir.mkdir(parents=True, exist_ok=True)
-        return primary_dir
-    except PermissionError as e:
-        logger.warning(
-            f"Permission denied for cache dir '{primary_dir}'. Falling back to /tmp. Error: {e}"
-        )
-    except Exception as e:
-        logger.warning(
-            f"Error creating cache dir '{primary_dir}'. Falling back to /tmp. Error: {e}"
-        )
-
-    fallback_base = Path("/tmp/ai_cache")
-    fallback_dir = fallback_base / function_name
-    try:
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-        return fallback_dir
-    except Exception as e:
-        # As a last resort, return the primary path (calls will likely fail, but we log it)
-        logger.error(
-            f"Failed to create fallback cache dir '{fallback_dir}'. Continuing with primary path which may fail. Error: {e}"
-        )
-        return primary_dir
-
-
-def _get_cache_key(input_data: dict) -> str:
-    """Generate a cache key from input data by sanitizing all text values."""
-    # Collect all text values from the input data
-    text_values = []
-    for key in sorted(input_data.keys()):  # Sort for consistency
-        value = input_data[key]
-        if isinstance(value, str) and value.strip():  # Only non-empty strings
-            text_values.append(value)
-
-    if not text_values:
-        # Fallback to hash if no text found
-        data_str = json.dumps(input_data, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(data_str.encode()).hexdigest()
-
-    # Combine all text values with a separator
-    combined_text = " | ".join(text_values)
-
-    # Normalize unicode and remove accents/umlauts (optimized: use str.translate for faster removal)
-    normalized = unicodedata.normalize("NFD", combined_text)
-    trans_table = dict.fromkeys(c for c in range(128) if unicodedata.category(chr(c)) == "Mn")
-    without_accents = normalized.translate(trans_table)
-
-    # Replace spaces with underscores and remove all punctuation (optimized: combine regex)
-    sanitized = re.sub(r"[^a-zA-Z0-9_ ]", "", without_accents)  # Remove punctuation (note: space instead of \s for speed)
-    sanitized = re.sub(r" +", "_", sanitized)  # Replace spaces with underscores
-    sanitized = re.sub(r"_+", "_", sanitized)  # Replace multiple underscores with single
-    sanitized = sanitized.strip("_").lower()  # Remove leading/trailing underscores and lowercase
-
-    return sanitized
-
-
-def _get_cache(function_name: str, input_data: dict) -> dict | None:
-    """Retrieve cached result if it exists."""
-    cache_dir = _get_cache_dir(function_name)
-    cache_key = _get_cache_key(input_data)
-    cache_file = cache_dir / f"{cache_key}.json"
-
-    try:
-        if cache_file.exists():
-            logger.info(f"Hit cache for {function_name} with key {cache_key}")
-            with open(cache_file, "r", encoding="utf-8") as f:
-                cached_data = json.load(f)
-                logger.debug(f"Cache hit for {function_name} with key {cache_key}")
-                return cached_data
-    except Exception as e:
-        logger.warning(f"Error reading cache for {function_name}: {e}")
-
-    return None
-
-
-def _set_cache(function_name: str, input_data: dict, result: dict) -> None:
-    """Store result in cache."""
-    cache_dir = _get_cache_dir(function_name)
-    cache_key = _get_cache_key(input_data)
-    cache_file = cache_dir / f"{cache_key}.json"
-
-    try:
-        with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-            logger.debug(f"Cache stored for {function_name} with key {cache_key}")
-    except Exception as e:
-        logger.warning(f"Error writing cache for {function_name}: {e}")
+cache_manager = CacheManager("LLM")
 
 
 async def _ask_grok(system_prompt: str, user_prompt: str) -> str:
@@ -213,7 +114,9 @@ async def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, 
             return (grok_result, "grok") if grok_result else ("", "unknown")
         else:
             # Grok didn't finish in 1s, now race both
-            done_both, pending_both = await asyncio.wait([grok_task, baseten_task], return_when=asyncio.FIRST_COMPLETED)
+            done_both, pending_both = await asyncio.wait(
+                [grok_task, baseten_task], return_when=asyncio.FIRST_COMPLETED
+            )
             finished_task = done_both.pop()
             resp = await finished_task
             model_source = "grok" if finished_task == grok_task else "gpt"
@@ -250,7 +153,7 @@ async def classify_intent(spoken_text: str) -> tuple[str, str, float | None, str
 
     # Check cache first
     cache_input = {"spoken_text": spoken_text}
-    cached_result = _get_cache("classify_intent", cache_input)
+    cached_result = cache_manager.get("classify_intent", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for classify_intent")
         return (
@@ -325,7 +228,7 @@ async def classify_intent(spoken_text: str) -> tuple[str, str, float | None, str
 
         duration = time.monotonic() - start
         # Cache the result (include duration)
-        _set_cache(
+        cache_manager.set(
             "classify_intent",
             cache_input,
             {"classification": result, "reasoning": reasoning, "duration": duration},
@@ -338,7 +241,9 @@ async def classify_intent(spoken_text: str) -> tuple[str, str, float | None, str
         return fallback, f"Fehler: {e}", None, "unknown"
 
 
-async def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, float | None, str]:
+async def yes_no_question(
+    spoken_text: str, context: str
+) -> tuple[bool, str, float | None, str]:
     """
     Determines if spoken text represents clear agreement (Yes) or not (No).
     Returns (is_agreement, reasoning, duration, model_source) where duration is None when timing data is unavailable.
@@ -348,7 +253,7 @@ async def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, fl
 
     # Check cache first
     cache_input = {"spoken_text": spoken_text, "context": context}
-    cached_result = _get_cache("yes_no_question", cache_input)
+    cached_result = cache_manager.get("yes_no_question", cache_input)
     if cached_result:
         logger.info(f"Returning cached result for yes_no_question")
         return (
@@ -394,16 +299,18 @@ async def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, fl
             reasoning = "Keine Begründung gegeben."
 
         is_agreement = decision == "Ja"
-        logger.info(
-            f"Yes/No question result: {is_agreement}. Model: {model_source}"
-        )
+        logger.info(f"Yes/No question result: {is_agreement}. Model: {model_source}")
 
         duration = time.monotonic() - start
         # Cache the result including duration
-        _set_cache(
+        cache_manager.set(
             "yes_no_question",
             cache_input,
-            {"is_agreement": is_agreement, "reasoning": reasoning, "duration": duration},
+            {
+                "is_agreement": is_agreement,
+                "reasoning": reasoning,
+                "duration": duration,
+            },
         )
 
         return is_agreement, reasoning, duration, model_source
@@ -413,153 +320,127 @@ async def yes_no_question(spoken_text: str, context: str) -> tuple[bool, str, fl
         return False, f"Fehler: {e}", None, "unknown"
 
 
-async def contains_location(spoken_text: str) -> tuple[bool, str, float | None, str]:
+async def process_location(
+    spoken_text: str,
+) -> tuple[bool, bool, str | None, float | None, str]:
     """
-    Determines if spoken text contains any kind of location information.
-    Returns (contains_location, reasoning, duration, model_source) where duration is None when timing data is unavailable.
+    Determines if spoken text contains location information and extracts it if present.
+    Returns (contains_location, extracted_address, reasoning, duration, model_source).
+    Note: Do not return any reasoning from the model; reasoning is always an empty string.
     """
     if not spoken_text:
-        return False, "Kein Text vorhanden.", None, "cache"
+        return None, None, None, None, 0.0, "cache"
 
     # Check cache first
     cache_input = {"spoken_text": spoken_text}
-    cached_result = _get_cache("contains_location", cache_input)
+    cached_result = cache_manager.get("process_location", cache_input)
     if cached_result:
-        logger.info(f"Returning cached result for contains_location")
+        logger.info(f"Returning cached result for process_location")
         return (
             cached_result.get("contains_loc"),
-            cached_result.get("reasoning"),
+            cached_result.get("contains_city"),
+            cache_input.get("knows_location"),
+            cached_result.get("address"),
             0.0,
             "cache",
         )
 
     try:
         system_prompt = """
-    Entscheide, ob der gegebene Text Standortinformationen enthält. Gib eine kurze Begründung (max 10 Wörter) und "Ja" oder "Nein" auf Deutsch aus.
+    Entscheide ob der gegebene Text Standortinformationen enthält. Falls ja, entscheide ob ein Ort oder PLZ extrahiert werden kann, und extrahiere die Adresse so vollständig wie möglich.
+    Gib KEINE Begründung aus. Falls nein Entscheide ob der User es nicht weiß oder ob er über etwas anderes spricht.
 
-    Format: <Begründung> -> <Ja/Nein>
-    Immer -> verwenden. Ohne < >.
+    Ausgabeformat (ohne zusätzliche Texte):
+    <Ja/Nein> -> <Ja/Nein> -> <Ja/Nein> -> <Adresse oder Leer>
+    (1. Enthält Standortinformationen? 2. Enthält Ort oder PLZ? 3. Weiß der User seine Adresse oder nicht? 4. Extrahierte Adresse)
 
-    Ja bei jeglichen Standortinformationen, inkl.:
+    Enthält Standortinformationen bei jeglichen Standortinformationen, inkl.:
     - Straßenname, Hausnummer
     - Postleitzahl, Ortsname
     - Autobahnnummern mit Ortsangaben
     - Teiladressen oder nur Ortsnamen
 
-    Nein bei:
+    Enthält keine Standortinformationen bei:
     - Keine Standortinformationen
     - Allgemeine Aussagen ohne Adressbezug
     - Aussage dass Standort unbekannt ist
 
+    Weiß der User seine Adresse oder nicht?
+    - Nur "Nein" wenn der User explizit sagt dass er seine Adresse nicht kennt.
+    - Ansonsten "Ja".
+
+    Regeln für Adress-Extraktion:
+    1. Extrahiere so vollständig wie möglich.
+    2. Erfinde keine zusätzlichen Details.
+    3. Convertiere ausgeschriebene Zahlen in Ziffern (z.B. "einundfünfzig" -> "51").
+    4. Gib die Adresse in einfacher Form zurück, z.B. "Güterstraße 12 in 94469 Deggendorf".
+
     Beispiele:
-    - "Ich wohne in der Güterstraße 12 in 94469 Deggendorf." => "Enthält Adresse. -> Ja"
-    - "Kannst du zu mir kommen? Ich bin krank." => "Keine Adresse. -> Nein"
+    Hauptstraße 5 in Immenstadt: Ja -> Ja -> -> Ja -> Hauptstraße 5 in Immenstadt
+    4040 Linz: Ja -> Ja -> -> Ja -> 4040 Linz
+    Ich wohne in der Friedrichstraße 5: Ja -> Nein -> Ja -> Friedrichstraße 5
+    Ich weiß nicht wo ich bin.: Nein -> Nein -> Nein -> 
+
+    Orte die oft vorkommen:
+    Immenstadt, Kempten, Memmingen, Allgäu region
     """
         user_prompt = f'Text: "{spoken_text}"'
 
         start = time.monotonic()
         response, model_source = await _ask_llm_parallel(system_prompt, user_prompt)
         response = response.strip()
-        if "->" in response:
-            reasoning, decision = response.split("->", 1)
-            decision = decision.strip()
-            reasoning = reasoning.strip()
+
+        parts = [p.strip() for p in response.split("->", 3)]
+        if len(parts) == 4:
+            decision = parts[0]
+            contains_city = parts[1]
+            knows_location = parts[2]
+            address_str = parts[3]
         else:
-            decision = response
-            reasoning = "Keine Begründung gegeben."
+            decision = "Nein"
+            contains_city = "Nein"
+            knows_location = "Nein"
+            address_str = ""
 
-        contains_loc = decision == "Ja"
+        contains_loc = decision.lower() == "ja"
+        contains_city_bool = contains_city.lower() == "ja"
+        knows_location_bool = knows_location.lower() == "ja"
+        extracted_address = address_str if contains_loc and address_str else None
+
         logger.info(
-            f"Location presence result: {contains_loc}. Model: {model_source}"
+            f"Location processing result: contains={contains_loc}, contains_city={contains_city_bool}, address={extracted_address}. Model: {model_source}"
         )
 
         duration = time.monotonic() - start
-        # Cache the result including duration
-        _set_cache(
-            "contains_location",
+        # Cache the result including duration (reasoning intentionally omitted)
+        cache_manager.set(
+            "process_location",
             cache_input,
-            {"contains_loc": contains_loc, "reasoning": reasoning, "duration": duration},
+            {
+                "contains_loc": contains_loc,
+                "contains_city": contains_city_bool,
+                "knows_location": knows_location_bool,
+                "address": extracted_address,
+                "duration": duration,
+            },
         )
 
-        return contains_loc, reasoning, duration, model_source
+        return contains_loc, contains_city_bool, knows_location_bool, extracted_address, duration, model_source
 
     except Exception as e:
-        logger.error(f"Error in contains_location: {e}")
-        return False, f"Fehler: {e}", None, "unknown"
+        logger.error(f"Error in process_location: {e}")
+        return False, None, "", None, "unknown"
 
-
-async def extract_location(spoken_text: str) -> tuple[str | None, str, float | None, str]:
-    """
-    Extracts only the address part from spoken text.
-    Returns (address, reasoning, duration, model_source) where duration is None when timing data is unavailable.
-    """
-
-    # Check cache first
-    cache_input = {"spoken_text": spoken_text}
-    cached_result = _get_cache("extract_location", cache_input)
-    if cached_result:
-        logger.info(f"Returning cached result for extract_location")
-        return (
-            cached_result.get("address"),
-            cached_result.get("reasoning"),
-            0.0,
-            "cache",
-        )
-
-    try:
-        system_prompt = """
-    Extrahiere NUR den Adressteil aus dem gesprochenen Text. Gib die Adresse und eine kurze Begründung auf Deutsch aus.
-
-    Gebe nur die Adresse zurück, ohne zusätzliche Erklärungen. Keine Begründung oder Kontext. Nur die Adresse.
-
-    REGELN:
-    - Behalte: Straßenname, Hausnummer, PLZ, Ortsname
-    - Entferne: Füllwörter, Fragen, Zeitangaben, persönliche Kommentare
-    - Format: "Straße Hausnummer in PLZ Ort" oder verfügbare Teile davon
-    - Falls keine Adresse erkennbar: "Keine Adresse"
-
-    BEISPIELE:
-    "Ich wohne in der Güterstraße 12 in 94469 Deggendorf." => "Güterstraße 12 in 94469 Deggendorf"
-    "Meine Adresse ist Hauptstraße 5, 80331 München." => "Hauptstraße 5, 80331 München"
-    "Kannst du zu mir kommen? Ich bin krank." => "Keine Adresse"
-    "7 9 5 9 2" => "79592"
-    "Osterhofen" => "Osterhofen"
-    "Ich bin auf der A96 bei Plattling." => "A96 bei Plattling"
-    """
-        user_prompt = f'Text: "{spoken_text}"'
-
-        start = time.monotonic()
-        response, model_source = await _ask_llm_parallel(system_prompt, user_prompt)
-        response = response.strip()
-        address = response if response and response != "Keine Adresse" else None
-        logger.info(f"Location extraction model: {model_source}")
-
-        duration = time.monotonic() - start
-        # Cache the result including duration
-        _set_cache(
-            "extract_location",
-            cache_input,
-            {"address": address, "reasoning": "Extraktion abgeschlossen.", "duration": duration},
-        )
-
-        return address, "Extraktion abgeschlossen.", duration, model_source
-    except Exception as e:
-        logger.error(f"Error in extract_location: {e}")
-        return None, f"Fehler: {e}", None, "unknown"
 
 if __name__ == "__main__":
+
     async def main():
-        # Example usage
-        intent, reason, duration, model = await classify_intent("Ich habe meinen Autoschlüssel im Auto eingeschlossen.")
-        print(f"Intent: {intent}, Reason: {reason}, Model: {model}, Duration: {duration}")
-
-        agreement, reason, duration, model = await yes_no_question("Ja, das klingt gut.", "Möchten Sie fortfahren?")
-        print(f"Agreement: {agreement}, Reason: {reason}, Model: {model}, Duration: {duration}")
-
-        contains_loc, reason, duration, model = await contains_location("Ich wohne in der Güterstraße 12 in 94469 Deggendorf.")
-        print(f"Contains Location: {contains_loc}, Reason: {reason}, Model: {model}, Duration: {duration}")
-
-        address, reason, duration, model = await extract_location("Meine Adresse ist Hauptstraße 5, 80331 München.")
-        print(f"Address: {address}, Reason: {reason}, Model: {model}, Duration: {duration}")
+        text = "Johann Wilhelm Kleinstraße einundfünfzig"
+        contains_loc, contains_city, address, duration, model = await process_location(text)
+        print(f"Contains location: {contains_loc}")
+        print(f"Contains city: {contains_city}")
+        print(f"Extracted address: {address}")
+        print(f"Duration: {duration}")
+        print(f"Model used: {model}")
 
     asyncio.run(main())

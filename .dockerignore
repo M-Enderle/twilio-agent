@@ -65,3 +65,5 @@ tests/
 test/
 *test.py
 *_test.py
+
+cache/

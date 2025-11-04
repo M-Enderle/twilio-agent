@@ -20,8 +20,8 @@ from twilio_agent.actions.redis_actions import (agent_message, delete_job_info,
                                                 google_message, save_job_info,
                                                 save_location)
 from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.pricing import (get_price_locksmith,
-                                        get_price_towing)
+from twilio_agent.utils.eleven import cache_manager, generate_speech
+from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
 
 contact_manager = ContactManager()
 
@@ -70,7 +70,13 @@ def new_response():
 
 
 def say(obj, text: str):
-    obj.say(text, voice="Google.de-DE-Chirp3-HD-Charon", language="de-DE")
+    if not text:
+        return
+    audio_bytes, duration = generate_speech(text)
+    input_data = {"text": text}
+    key = cache_manager.get_cache_key(input_data)
+    url = f"{server_url}/audio/{key}.mp3"
+    obj.play(url)
 
 
 def send_sms_with_link(to: str):
@@ -215,10 +221,13 @@ def outbound_call_after_sms(to: str):
 
 
 async def fallback_no_response(response: VoiceResponse, request: Request):
+    print(response)
+    print(request)
     say(
         response,
-        "Leider konnte ich keine Eingabe erkennen. Ich verbinde dich mit einem Mitarbeiter.",
+        "Leider konnte ich keine Eingabe erkennen, Ich verbinde dich jetzt mit einem Mitarbeiter.",
     )
+    start_transfer(response, await caller(request))
 
 
 def send_job_details_sms(caller: str, transferred_to: str):

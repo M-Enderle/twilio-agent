@@ -20,8 +20,8 @@ class GeocodeResult(NamedTuple):
 load_dotenv()
 API_KEY = os.getenv("MAPS_API_KEY")
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-ZIPCODE_FILES = ("zipcodes.de.json", "zipcodes.at.json")
+BOUNDS_SW = (47.41670193989541, 8.238446284078584)
+BOUNDS_NE = (48.44400690230724, 13.647079164629368)
 
 
 def _fetch_first_result(params: dict) -> Optional[dict]:
@@ -79,18 +79,20 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
         raise ValueError("MAPS_API_KEY environment variable is not set")
 
     forward = _fetch_first_result(
-        {"address": address, "key": API_KEY, "region": "de", "language": "de"}
+        {
+            "address": address,
+            "key": API_KEY,
+            "region": "de",
+            "language": "de",
+            "bounds": f"{BOUNDS_SW[0]},{BOUNDS_SW[1]}|{BOUNDS_NE[0]},{BOUNDS_NE[1]}",
+        }
     )
     if not forward:
         return None
 
     location = forward["geometry"]["location"]
     latitude, longitude = location["lat"], location["lng"]
-
-    reverse = _fetch_first_result(
-        {"latlng": f"{latitude},{longitude}", "key": API_KEY, "language": "de"}
-    )
-    result = reverse or forward
+    result = forward
     plz, ort = _extract_plz_ort(result)
 
     return GeocodeResult(

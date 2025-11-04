@@ -44,7 +44,9 @@ def _closest_provider(origin: routing_v2.Waypoint, intent: str):
     for company in _load_companies(intent, include_fallback=False):
         try:
             response = client.compute_routes(
-                request=_compute_request(origin, company.get("adress", company.get("zipcode", ""))),
+                request=_compute_request(
+                    origin, company.get("adress", company.get("zipcode", ""))
+                ),
                 metadata=[
                     ("x-goog-fieldmask", "routes.distanceMeters,routes.duration")
                 ],

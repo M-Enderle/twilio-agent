@@ -6,7 +6,7 @@ authors = [
     {name = "Moritz Enderle",email = "contact@moritzenderle.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 dependencies = [
     "fastapi (>=0.118.0,<0.119.0)",
     "uvicorn[standard] (>=0.37.0,<0.38.0)",
@@ -27,7 +27,9 @@ dependencies = [
     "jinja2 (>=3.1.6,<4.0.0)",
     "tzdata (>=2025.2,<2026.0)",
     "python-telegram-bot (>=22.5,<23.0)",
-    "requests (>=2.25.0,<3.0.0)"
+    "requests (>=2.25.0,<3.0.0)",
+    "elevenlabs (>=2.20.1,<3.0.0)",
+    "num2words (>=0.5.14,<0.6.0)",
 ]
 
 

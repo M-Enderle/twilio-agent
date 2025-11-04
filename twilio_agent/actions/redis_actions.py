@@ -44,7 +44,7 @@ def _recording_key(
     return f"notdienststation:verlauf:{number_without_plus}:{timestamp}:recording:{recording_type}"
 
 
-def _set_hist_info(call_number: str, key: str, value: str) -> str:
+def _set_hist_info(call_number: str, key: str, value: str) -> None:
     start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
     if not start_time:
         logger.debug(
@@ -58,12 +58,20 @@ def _set_hist_info(call_number: str, key: str, value: str) -> str:
     redis_content = redis.get(history_key)
     if redis_content:
         content = yaml.safe_load(redis_content.decode("utf-8"))
+        if not isinstance(content, list):
+            content = []
     else:
         content = []
-    content.append({key: value})
+
+    # Remove any existing entries with the same key to avoid duplicates
+    filtered = [
+        entry for entry in content if not (isinstance(entry, dict) and key in entry)
+    ]
+    filtered.append({key: value})
+
     redis.set(
         history_key,
-        yaml.dump(content, default_flow_style=False, allow_unicode=True),
+        yaml.dump(filtered, default_flow_style=False, allow_unicode=True),
     )
 
 
@@ -109,7 +117,9 @@ def user_message(call_number: str, message: str):
     logger.info("User message: %s", message)
 
 
-def ai_message(call_number: str, message: str, duration: float = None, model_source: str = None):
+def ai_message(
+    call_number: str, message: str, duration: float = None, model_source: str = None
+):
     if duration is not None:
         message_with_timing = f"{message} (took {duration:.3f}s)"
     else:
@@ -191,6 +201,7 @@ def add_to_caller_queue(caller: str, name: str):
         json.dumps(queue),
         ex=persistance_time,
     )
+    _set_hist_info(caller, "Warteschlange", queue)
 
 
 def get_next_caller_in_queue(caller: str) -> str:

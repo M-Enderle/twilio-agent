@@ -32,6 +32,7 @@ class ContactManager:
         """Get all name to phone mappings."""
         return self.name_to_phone
 
+
 if __name__ == "__main__":
     cm = ContactManager()
     print(cm.get_all_contacts())
