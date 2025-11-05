@@ -103,9 +103,13 @@ class CacheManager:
 
     def get(self, function_name: str, input_data: dict) -> Optional[Any]:
         """Retrieve cached result if it exists."""
+        logger.info(f"Getting cache for {function_name} with input data: {input_data}")
         cache_key = self.get_cache_key(input_data)
+        logger.info(f"Cache key: {cache_key}")
         if cache_key in self.cache:
+            logger.info(f"Returning cached result for {function_name}")
             return self.cache[cache_key]
+        logger.info(f"No cached result found for {function_name}")
         return None
 
     def set(
