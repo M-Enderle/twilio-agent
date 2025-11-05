@@ -221,8 +221,6 @@ def outbound_call_after_sms(to: str):
 
 
 async def fallback_no_response(response: VoiceResponse, request: Request):
-    print(response)
-    print(request)
     say(
         response,
         "Leider konnte ich keine Eingabe erkennen, Ich verbinde dich jetzt mit einem Mitarbeiter.",

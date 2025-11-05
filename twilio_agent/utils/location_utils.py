@@ -30,18 +30,13 @@ def _fetch_first_result(params: dict) -> Optional[dict]:
         response.raise_for_status()
         data = response.json()
     except requests.RequestException as exc:
-        print(f"Request failed: {exc}")
         return None
 
     if data.get("status") != "OK":
-        print(
-            f"API error: {data.get('status')} - {data.get('error_message', 'No error message')}"
-        )
         return None
 
     results = data.get("results") or []
     if not results:
-        print("No results found")
         return None
 
     return results[0]

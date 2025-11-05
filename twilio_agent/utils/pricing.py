@@ -57,7 +57,6 @@ def _closest_provider(origin: routing_v2.Waypoint, intent: str):
             if route.duration.seconds < closest[2]:
                 closest = (company, route.distance_meters, route.duration.seconds)
         except Exception as e:
-            print(f"Error computing route for {company['name']}: {e}")
             continue
     provider = closest[0]
     if provider is None:
@@ -76,7 +75,6 @@ def _closest_provider(origin: routing_v2.Waypoint, intent: str):
                 if route.duration.seconds < closest[2]:
                     closest = (company, route.distance_meters, route.duration.seconds)
             except Exception as e:
-                print(f"Error computing route for fallback {company['name']}: {e}")
                 continue
         provider = closest[0]
         if provider is None:
