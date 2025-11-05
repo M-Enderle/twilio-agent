@@ -103,11 +103,8 @@ class CacheManager:
 
     def get(self, function_name: str, input_data: dict) -> Optional[Any]:
         """Retrieve cached result if it exists."""
-        logger.info(f"Getting cache for {function_name} with input data: {input_data}")
         cache_key = self.get_cache_key(input_data)
-        logger.info(f"Cache key: {cache_key}")
         if cache_key in self.cache:
-            logger.info(f"Returning cached result for {function_name}")
             return self.cache[cache_key]
         
         # Check disk if not in memory cache
@@ -125,7 +122,6 @@ class CacheManager:
                         with open(cache_file, "rb") as f:
                             data = f.read()
                     self.cache[cache_key] = data
-                    logger.info(f"Loaded cached result from disk for {function_name}")
                     return data
                 except Exception as e:
                     logger.warning(f"Error loading cache file {cache_file}: {e}")
