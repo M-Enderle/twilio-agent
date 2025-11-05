@@ -109,6 +109,27 @@ class CacheManager:
         if cache_key in self.cache:
             logger.info(f"Returning cached result for {function_name}")
             return self.cache[cache_key]
+        
+        # Check disk if not in memory cache
+        cache_dir = self._get_cache_dir(function_name)
+        for cache_file in cache_dir.iterdir():
+            if cache_file.is_file() and cache_file.stem == cache_key:
+                try:
+                    if cache_file.suffix == ".json":
+                        with open(cache_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    elif cache_file.suffix in [".wav", ".mp3", ".ogg", ".flac"]:
+                        with open(cache_file, "rb") as f:
+                            data = f.read()
+                    else:
+                        with open(cache_file, "rb") as f:
+                            data = f.read()
+                    self.cache[cache_key] = data
+                    logger.info(f"Loaded cached result from disk for {function_name}")
+                    return data
+                except Exception as e:
+                    logger.warning(f"Error loading cache file {cache_file}: {e}")
+        
         logger.info(f"No cached result found for {function_name}")
         return None
 
@@ -137,3 +158,29 @@ class CacheManager:
             logger.debug(f"Cache stored for {function_name} with key {cache_key}")
         except Exception as e:
             logger.warning(f"Error writing cache for {function_name}: {e}")
+
+    def get_by_key(self, key: str) -> Optional[Any]:
+        """Retrieve cached result by key, checking memory first, then disk."""
+        if key in self.cache:
+            return self.cache[key]
+        
+        # Check all subdirectories for the file
+        for cache_dir in self.root_folder.iterdir():
+            if cache_dir.is_dir():
+                for cache_file in cache_dir.iterdir():
+                    if cache_file.is_file() and cache_file.stem == key:
+                        try:
+                            if cache_file.suffix == ".json":
+                                with open(cache_file, "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                            elif cache_file.suffix in [".wav", ".mp3", ".ogg", ".flac"]:
+                                with open(cache_file, "rb") as f:
+                                    data = f.read()
+                            else:
+                                with open(cache_file, "rb") as f:
+                                    data = f.read()
+                            self.cache[key] = data
+                            return data
+                        except Exception as e:
+                            logger.warning(f"Error loading cache file {cache_file}: {e}")
+        return None

@@ -76,7 +76,7 @@ def create_app() -> FastAPI:
     async def get_audio(key: str):
         """Serve cached audio snippets generated during the call flow."""
 
-        data = cache_manager.cache.get(key)
+        data = cache_manager.get_by_key(key)
         if data is None:
             raise HTTPException(status_code=404, detail="Audio not found")
         return Response(content=data, media_type="audio/mpeg")
