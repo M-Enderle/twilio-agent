@@ -48,7 +48,7 @@ async def incoming_call(request: Request):
     clear_caller_queue(caller_number)
 
     logger.info("Incoming call from %s", request.headers.get("X-Twilio-Call-SID"))
-    intent = get_intent(caller_number)
+    intent = get_intent(caller_number, True)
 
     previous_transferred_to = get_transferred_to(caller_number)
     if previous_transferred_to:

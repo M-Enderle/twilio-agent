@@ -99,8 +99,6 @@ def get_intent(call_number: str, return_anonymou: bool = False) -> str:
 
 
 def set_intent(call_number: str, intent: str):
-    if call_number == "anonymous":
-        return
     redis.set(
         f"notdienststation:anrufe:{call_number}:anliegen", intent, ex=persistance_time
     )
