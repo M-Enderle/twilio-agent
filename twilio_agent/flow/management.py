@@ -32,7 +32,7 @@ async def add_locksmith_contacts(request: Request):
     add_to_caller_queue(caller_number, first_contact)
 
     if first_contact.lower() not in ["tiberius", "marcel"]:
-        add_to_caller_queue(caller_number, "Jan")
+        add_to_caller_queue(caller_number, "Artur")
         add_to_caller_queue(caller_number, "Haas")
 
 
@@ -41,8 +41,8 @@ async def add_towing_contacts(request: Request):
     caller_number = await get_caller_number(request)
     clear_caller_queue(caller_number)
     add_to_caller_queue(caller_number, "Andi")
-    add_to_caller_queue(caller_number, "Nils")
-    add_to_caller_queue(caller_number, "Oemer")
+    add_to_caller_queue(caller_number, "Ömer")
+    add_to_caller_queue(caller_number, "Mennel")
 
 
 async def end_call(request: Request, with_message: bool = True):
