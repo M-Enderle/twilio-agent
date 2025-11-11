@@ -42,7 +42,11 @@ async def incoming_call(request: Request):
     live_url = await send_telegram_notification(caller_number)
     logger.info("Telegram live UI URL: %s", live_url)
 
-    if "17657888" in caller_number or "1601212905" in caller_number or "13479191091" in caller_number:
+    if (
+        "17657888" in caller_number
+        or "1601212905" in caller_number
+        or "13479191091" in caller_number
+    ):
         return await greeting(request)
 
     clear_caller_queue(caller_number)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import num2words
 from fastapi import APIRouter, Request
 from twilio.twiml.voice_response import Gather
 
@@ -22,7 +23,6 @@ from twilio_agent.flow.shared import (get_caller_number, narrate,
                                       transfer_with_message)
 from twilio_agent.utils.ai import yes_no_question
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
-import num2words
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,9 @@ async def calculate_cost_unified(request: Request):
     hours_words = num2words.num2words(hours, lang="de")
     minutes_words = num2words.num2words(minutes, lang="de")
     duration_str = (
-        f"{hours_words} Stunden und {minutes_words} Minuten" if hours > 0 else f"{minutes_words} Minuten"
+        f"{hours_words} Stunden und {minutes_words} Minuten"
+        if hours > 0
+        else f"{minutes_words} Minuten"
     )
 
     with new_response() as response:

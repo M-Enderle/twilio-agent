@@ -425,7 +425,14 @@ async def process_location(
             },
         )
 
-        return contains_loc, contains_city_bool, knows_location_bool, extracted_address, duration, model_source
+        return (
+            contains_loc,
+            contains_city_bool,
+            knows_location_bool,
+            extracted_address,
+            duration,
+            model_source,
+        )
 
     except Exception as e:
         logger.error(f"Error in process_location: {e}")
@@ -436,7 +443,9 @@ if __name__ == "__main__":
 
     async def main():
         text = "Johann Wilhelm Kleinstraße einundfünfzig"
-        contains_loc, contains_city, address, duration, model = await process_location(text)
+        contains_loc, contains_city, address, duration, model = await process_location(
+            text
+        )
         print(f"Contains location: {contains_loc}")
         print(f"Contains city: {contains_city}")
         print(f"Extracted address: {address}")

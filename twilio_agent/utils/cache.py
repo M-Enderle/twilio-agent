@@ -106,7 +106,7 @@ class CacheManager:
         cache_key = self.get_cache_key(input_data)
         if cache_key in self.cache:
             return self.cache[cache_key]
-        
+
         # Check disk if not in memory cache
         cache_dir = self._get_cache_dir(function_name)
         for cache_file in cache_dir.iterdir():
@@ -125,7 +125,7 @@ class CacheManager:
                     return data
                 except Exception as e:
                     logger.warning(f"Error loading cache file {cache_file}: {e}")
-        
+
         logger.info(f"No cached result found for {function_name}")
         return None
 
@@ -159,7 +159,7 @@ class CacheManager:
         """Retrieve cached result by key, checking memory first, then disk."""
         if key in self.cache:
             return self.cache[key]
-        
+
         # Check all subdirectories for the file
         for cache_dir in self.root_folder.iterdir():
             if cache_dir.is_dir():
@@ -178,5 +178,7 @@ class CacheManager:
                             self.cache[key] = data
                             return data
                         except Exception as e:
-                            logger.warning(f"Error loading cache file {cache_file}: {e}")
+                            logger.warning(
+                                f"Error loading cache file {cache_file}: {e}"
+                            )
         return None

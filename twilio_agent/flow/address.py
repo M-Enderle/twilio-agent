@@ -2,23 +2,19 @@
 
 import asyncio
 import logging
-import re
 import os
+import re
 import threading
-from num2words import num2words
 
 from fastapi import APIRouter, Request
+from num2words import num2words
 from twilio.twiml.voice_response import Gather, Record, Redirect
 
-from twilio_agent.actions.redis_actions import (
-    ai_message,
-    get_intent,
-    google_message,
-    redis as redis_client,
-    save_job_info,
-    save_location,
-    user_message,
-)
+from twilio_agent.actions.redis_actions import (ai_message, get_intent,
+                                                google_message)
+from twilio_agent.actions.redis_actions import redis as redis_client
+from twilio_agent.actions.redis_actions import (save_job_info, save_location,
+                                                user_message)
 from twilio_agent.actions.twilio_actions import new_response, say
 from twilio_agent.flow.management import (add_locksmith_contacts,
                                           add_towing_contacts)
@@ -68,7 +64,11 @@ async def address_query_unified(request: Request):
         await add_locksmith_contacts(request)
 
     with new_response() as response:
-        narrate(response, caller_number, "Nenne mir bitte deine Adresse mit Straße, Hausnummer und Wohnort.")
+        narrate(
+            response,
+            caller_number,
+            "Nenne mir bitte deine Adresse mit Straße, Hausnummer und Wohnort.",
+        )
         response.append(
             Record(
                 action="/parse-address-recording/",
@@ -78,7 +78,7 @@ async def address_query_unified(request: Request):
             )
         )
         return await send_twilio_response(request, response)
-    
+
 
 @router.api_route("/parse-address-recording/", methods=["GET", "POST"])
 async def parse_address_recording(request: Request):
@@ -90,6 +90,7 @@ async def parse_address_recording(request: Request):
         return await ask_plz_unified(request)
     recording_id = recording_url.rstrip("/").split("/")[-1]
     if caller_number and recording_id:
+
         def worker() -> None:
             cache_value = TRANSCRIPTION_ERROR_VALUE
             try:
@@ -147,7 +148,9 @@ async def parse_address_recording_2(request: Request, recording_id: str):
                         "Failed to clear cached address transcription for %s",
                         caller_number,
                     )
-                decoded = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+                decoded = (
+                    cached.decode("utf-8") if isinstance(cached, bytes) else cached
+                )
                 if decoded == TRANSCRIPTION_ERROR_VALUE:
                     speech_result = None
                 else:
@@ -160,7 +163,8 @@ async def parse_address_recording_2(request: Request, recording_id: str):
                 redis_client.delete(key)
             except Exception:  # noqa: BLE001 - non-critical clean-up failure
                 logger.exception(
-                    "Failed to clear stale address transcription key for %s", caller_number
+                    "Failed to clear stale address transcription key for %s",
+                    caller_number,
                 )
     if speech_result is None:
         speech_result, _ = transcribe_speech(_build_recording_url(recording_id))
@@ -169,13 +173,18 @@ async def parse_address_recording_2(request: Request, recording_id: str):
     user_message(caller_number, speech_result)
 
     try:
-        contains_loc, contains_city_bool, knows_adress, extracted_address, duration, model_source = await asyncio.wait_for(
-            process_location(speech_result), timeout=6.0
-        )
+        (
+            contains_loc,
+            contains_city_bool,
+            knows_adress,
+            extracted_address,
+            duration,
+            model_source,
+        ) = await asyncio.wait_for(process_location(speech_result), timeout=6.0)
     except asyncio.TimeoutError:
         ai_message(caller_number, "<Request timed out>", 6.0)
         return await transfer_with_message(request)
-    
+
     if knows_adress is not None and not knows_adress:
         ai_message(
             caller_number,
@@ -193,7 +202,7 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             model_source,
         )
         return await ask_plz_unified(request)
-    
+
     ai_message(
         caller_number,
         f"<Location extracted: {extracted_address}>",
@@ -213,7 +222,7 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             f"Google Maps konnte die Adresse '{extracted_address}' nicht eindeutig finden.",
         )
         return await ask_plz_unified(request)
-    
+
     parsed_location = extracted_address
     save_job_info(caller_number, "Adresse erkannt", parsed_location)
     google_message(caller_number, f"Erkannte Adresse: {parsed_location}")
@@ -233,9 +242,22 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             f"Google Maps Ergebnis: {location.formatted_address} ({location.google_maps_link})",
         )
 
-        place_phrase = " ".join(
-            filter(None, [" ".join(num2words(int(d), lang="de") for d in str(location.plz or "") if d.isdigit()).strip(), location.ort])
-        ).strip() or location.formatted_address
+        place_phrase = (
+            " ".join(
+                filter(
+                    None,
+                    [
+                        " ".join(
+                            num2words(int(d), lang="de")
+                            for d in str(location.plz or "")
+                            if d.isdigit()
+                        ).strip(),
+                        location.ort,
+                    ],
+                )
+            ).strip()
+            or location.formatted_address
+        )
 
         with new_response() as response:
             narrate(
@@ -255,10 +277,13 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             gather = Gather(**gather_kwargs)
             response.append(gather)
 
-            say(response, "Bitte bestätige mit ja oder nein, ob die Adresse korrekt ist.")
+            say(
+                response,
+                "Bitte bestätige mit ja oder nein, ob die Adresse korrekt ist.",
+            )
             gather2 = Gather(**gather_kwargs)
             response.append(gather2)
-            
+
             return await send_twilio_response(request, response)
 
     google_message(
