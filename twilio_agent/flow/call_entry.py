@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Request
 from twilio.twiml.voice_response import Gather
+import pytz
 
 from twilio_agent.actions.recording_actions import start_recording
 from twilio_agent.actions.redis_actions import (add_to_caller_queue,
@@ -18,6 +20,8 @@ from twilio_agent.actions.telegram_actions import send_telegram_notification
 from twilio_agent.actions.twilio_actions import (fallback_no_response,
                                                  new_response, say,
                                                  send_request, start_transfer)
+from twilio.twiml.voice_response import Dial, Number
+from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.flow.address import address_query_unified
 from twilio_agent.flow.management import (add_locksmith_contacts,
                                           add_towing_contacts)
@@ -36,6 +40,23 @@ async def incoming_call(request: Request):
     """Initial endpoint that processes every inbound call."""
     caller_number = await get_caller_number(request)
     form_data = await request.form()
+
+    # Check if current time is between 6:30 and 22:30 Berlin time
+    berlin_tz = pytz.timezone('Europe/Berlin')
+    current_time = datetime.now(berlin_tz)
+    
+    # If between 6:30 (6.5) and 22:30 (22.5), transfer immediately to Andi
+    if 6.5 <= current_time.hour + current_time.minute / 60 < 22.5:
+        # Direct transfer to Andi without storing anything
+        contact_manager = ContactManager()
+        andi_phone = contact_manager.get_phone("andi")
+        
+        if andi_phone:
+            with new_response() as response:
+                dial = Dial(callerId="+491604996655", timeout=17)
+                dial.append(Number(andi_phone))
+                response.append(dial)
+                return send_request(request, response)
 
     init_new_call(caller_number)
 
