@@ -16,7 +16,7 @@ from twilio_agent.actions.redis_actions import (add_to_caller_queue,
                                                 get_intent, get_transferred_to,
                                                 init_new_call, save_job_info,
                                                 set_intent, user_message)
-from twilio_agent.actions.telegram_actions import send_telegram_notification
+from twilio_agent.actions.telegram_actions import send_telegram_notification, send_simple_notification
 from twilio_agent.actions.twilio_actions import (fallback_no_response,
                                                  new_response, say,
                                                  send_request, start_transfer)
@@ -47,13 +47,16 @@ async def incoming_call(request: Request):
     
     # If between 6:30 (6.5) and 22:30 (22.5), transfer immediately to Andi
     if 6.5 <= current_time.hour + current_time.minute / 60 < 22.5:
+        # Send simple telegram notification
+        asyncio.create_task(send_simple_notification(caller_number))
+        
         # Direct transfer to Andi without storing anything
         contact_manager = ContactManager()
         andi_phone = contact_manager.get_phone("andi")
         
         if andi_phone:
             with new_response() as response:
-                dial = Dial(callerId="+491604996655", timeout=17)
+                dial = Dial(callerId="+491604996655")
                 dial.append(Number(andi_phone))
                 response.append(dial)
                 return send_request(request, response)

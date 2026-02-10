@@ -31,6 +31,10 @@ async def add_locksmith_contacts(request: Request):
     first_contact = get_job_info(caller_number, "Anbieter") or "Andi"
     add_to_caller_queue(caller_number, first_contact)
 
+    if first_contact.lower() not in ["tiberius", "marcel"]:
+        add_to_caller_queue(caller_number, "Haas")
+        add_to_caller_queue(caller_number, "Wassermann")
+
     cm = ContactManager()
     for contact in cm.get_contacts_for_category("locksmith"):
         name = contact.get("name", "")

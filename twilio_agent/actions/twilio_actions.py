@@ -257,7 +257,7 @@ def start_transfer(response: VoiceResponse, caller: str) -> str:
         return "no_more_agents"
 
     if get_job_info(caller, "Erfolgreich weitergeleitet") == "Nein":
-        timeout = 10
+        timeout = 7
     else:
         timeout = 17
 
