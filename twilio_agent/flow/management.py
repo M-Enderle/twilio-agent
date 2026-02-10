@@ -31,7 +31,6 @@ async def add_locksmith_contacts(request: Request):
     first_contact = get_job_info(caller_number, "Anbieter") or "Andi"
     add_to_caller_queue(caller_number, first_contact)
 
-<<<<<<< HEAD
     if first_contact.lower() not in ["tiberius", "marcel"]:
         add_to_caller_queue(caller_number, "Haas")
         add_to_caller_queue(caller_number, "Wassermann")
@@ -41,11 +40,6 @@ async def add_locksmith_contacts(request: Request):
         name = contact.get("name", "")
         if name.lower() != first_contact.lower():
             add_to_caller_queue(caller_number, name)
-=======
-    if first_contact.lower() not in ["tiberius", "marcel"]:
-        add_to_caller_queue(caller_number, "Haas")
-        add_to_caller_queue(caller_number, "Wassermann")
->>>>>>> 3513bc0 (Add Telegram notification and adjust call routing)
 
 
 async def add_towing_contacts(request: Request):
