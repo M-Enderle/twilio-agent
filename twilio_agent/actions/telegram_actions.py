@@ -64,6 +64,31 @@ async def send_message(tracking_url: str, phone: str, chat_id: str = None):
             pass
 
 
+async def send_simple_notification(caller_number: str):
+    """Send a simple Telegram notification that caller just called"""
+    try:
+        BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+        bot = Bot(token=BOT_TOKEN)
+        
+        berlin_tz = pytz.timezone("Europe/Berlin")
+        current_time = datetime.now(berlin_tz).strftime("%H:%M:%S")
+        
+        message = f"📞 Anruf eingegangen!\n\n👤 Anrufer: {caller_number}\n🕐 Uhrzeit: {current_time}"
+        
+        # Send to both chat IDs
+        chat_ids = [os.getenv("TELEGRAM_CHAT_ID"), "6919860852"]
+        for chat_id in chat_ids:
+            if chat_id and caller_number != "17657888":
+                try:
+                    await bot.send_message(chat_id=chat_id, text=message)
+                except Exception as e:
+                    logger.error(f"Error sending message to {chat_id}: {e}")
+        
+        await bot.close()
+    except Exception as e:
+        logger.error(f"Error sending simple notification: {e}")
+
+
 if __name__ == "__main__":
     # Example usage with a URL parameter
     url = "https://example.com/track/call123"
