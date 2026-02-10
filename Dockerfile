@@ -18,6 +18,12 @@ RUN apt-get update \
        libjpeg62-turbo-dev \
        libfreetype6-dev \
        libpng-dev \
+       supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20.x
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -30,13 +36,20 @@ COPY . .
 RUN pip install --no-cache-dir .
 
 
+FROM base AS svelte-build
+
+WORKDIR /app/dashboard
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
+COPY dashboard/ .
+RUN npm run build
+
+
 FROM base AS production
 
 # Create non-root user and prepare directories
-RUN useradd -m -u 10001 appuser \
-    && mkdir -p /app/logs \
-    && mkdir -p /app/ai_cache \
-    && chown -R appuser:appuser /app
+RUN mkdir -p /app/logs \
+    && mkdir -p /app/ai_cache
 
 # Copy site-packages and deps layer
 COPY --from=dependencies /usr/local /usr/local
@@ -44,14 +57,15 @@ COPY --from=dependencies /usr/local /usr/local
 # Copy application source (for static/templates and runtime assets)
 COPY . .
 
-# Fix ownership after copying files
-RUN chown -R appuser:appuser /app
+# Copy SvelteKit build
+COPY --from=svelte-build /app/dashboard/build /app/dashboard/build
+COPY --from=svelte-build /app/dashboard/node_modules /app/dashboard/node_modules
+COPY --from=svelte-build /app/dashboard/package.json /app/dashboard/package.json
 
-USER appuser
+# Copy supervisord config
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-EXPOSE 8000
+EXPOSE 8000 3000
 
-# Default command: run FastAPI via uvicorn
-CMD ["uvicorn", "twilio_agent.conversation_flow:app", "--host", "0.0.0.0", "--port", "8000", "--ws", "auto", "--workers", "4"]
-
-
+# Run both services via supervisord
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

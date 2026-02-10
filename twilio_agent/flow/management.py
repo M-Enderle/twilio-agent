@@ -31,18 +31,21 @@ async def add_locksmith_contacts(request: Request):
     first_contact = get_job_info(caller_number, "Anbieter") or "Andi"
     add_to_caller_queue(caller_number, first_contact)
 
-    if first_contact.lower() not in ["tiberius", "marcel"]:
-        add_to_caller_queue(caller_number, "Jan")
-        add_to_caller_queue(caller_number, "Haas")
+    cm = ContactManager()
+    for contact in cm.get_contacts_for_category("locksmith"):
+        name = contact.get("name", "")
+        if name.lower() != first_contact.lower():
+            add_to_caller_queue(caller_number, name)
 
 
 async def add_towing_contacts(request: Request):
     """Populate the transfer queue with towing contacts."""
     caller_number = await get_caller_number(request)
     clear_caller_queue(caller_number)
-    add_to_caller_queue(caller_number, "Andi")
-    add_to_caller_queue(caller_number, "Nils")
-    add_to_caller_queue(caller_number, "Oemer")
+
+    cm = ContactManager()
+    for contact in cm.get_contacts_for_category("towing"):
+        add_to_caller_queue(caller_number, contact.get("name", ""))
 
 
 async def end_call(request: Request, with_message: bool = True):

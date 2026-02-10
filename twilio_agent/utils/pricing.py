@@ -1,15 +1,17 @@
 import datetime
+import json
 import os
 
 import pytz
-import yaml
 from dotenv import load_dotenv
 from google.api_core.client_options import ClientOptions
 from google.maps import routing_v2
 from google.type import latlng_pb2
+from redis import Redis
 
 load_dotenv()
 maps_api_key = os.getenv("MAPS_API_KEY")
+REDIS_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379")
 
 client = routing_v2.RoutesClient(client_options=ClientOptions(api_key=maps_api_key))
 
@@ -20,11 +22,13 @@ TOWING_FALLBACK = (300, 500)
 
 
 def _load_companies(intent: str, include_fallback: bool = False) -> list[dict]:
-    with open("handwerker.yaml", "r", encoding="utf-8") as file:
-        companies = yaml.safe_load(file)[intent]
-        if not include_fallback:
-            companies = [c for c in companies if not c.get("fallback")]
-        return companies
+    from twilio_agent.utils.contacts import ContactManager
+
+    cm = ContactManager()
+    companies = cm.get_contacts_for_category(intent)
+    if not include_fallback:
+        companies = [c for c in companies if not c.get("fallback")]
+    return companies
 
 
 def _compute_request(origin: routing_v2.Waypoint, adress: str):
@@ -45,7 +49,7 @@ def _closest_provider(origin: routing_v2.Waypoint, intent: str):
         try:
             response = client.compute_routes(
                 request=_compute_request(
-                    origin, company.get("adress", company.get("zipcode", ""))
+                    origin, company.get("address", company.get("adress", company.get("zipcode", "")))
                 ),
                 metadata=[
                     ("x-goog-fieldmask", "routes.distanceMeters,routes.duration")
@@ -101,6 +105,18 @@ def _origin_from_coordinates(longitude, latitude):
 
 def _is_daytime():
     hour = datetime.datetime.now(pytz.timezone("Europe/Berlin")).hour
+    try:
+        r = Redis.from_url(REDIS_URL)
+        raw = r.get("notdienststation:config:active_hours")
+        if raw:
+            config = json.loads(raw.decode("utf-8"))
+            if config.get("twenty_four_seven"):
+                return True
+            day_start = config.get("day_start", 7)
+            day_end = config.get("day_end", 20)
+            return day_start <= hour < day_end
+    except Exception:
+        pass
     return 7 <= hour < 20
 
 

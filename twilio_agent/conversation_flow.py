@@ -7,16 +7,19 @@ from datetime import datetime, timezone
 
 import dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from twilio_agent.actions.location_sharing_actions import \
     router as location_router
+from twilio_agent.api.dashboard import router as dashboard_router
 from twilio_agent.actions.recording_actions import router as recording_router
 from twilio_agent.flow.address import router as address_router
 from twilio_agent.flow.call_entry import router as call_entry_router
 from twilio_agent.flow.management import router as management_router
 from twilio_agent.flow.sms_and_transfer import router as sms_router
 from twilio_agent.ui import router as ui_router
+from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.eleven import cache_manager
 
 dotenv.load_dotenv()
@@ -64,6 +67,14 @@ def create_app() -> FastAPI:
     _configure_logging()
 
     application = FastAPI(title="Twilio Conversation Flow")
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    application.include_router(dashboard_router, prefix="/api/dashboard")
     application.include_router(ui_router)
     application.include_router(call_entry_router)
     application.include_router(address_router)
@@ -80,6 +91,13 @@ def create_app() -> FastAPI:
         if data is None:
             raise HTTPException(status_code=404, detail="Audio not found")
         return Response(content=data, media_type="audio/mpeg")
+
+    @application.on_event("startup")
+    async def startup_migrate_contacts():
+        try:
+            ContactManager().migrate_from_yaml()
+        except Exception as e:
+            logger.warning("Contact migration on startup failed: %s", e)
 
     @application.get("/health")
     async def health_check():
