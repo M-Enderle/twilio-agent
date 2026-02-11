@@ -16,6 +16,7 @@ POCKETID_USERINFO_URL = (
     + "/api/oidc/userinfo"
 )
 TOKEN_CACHE_TTL = 300  # 5 minutes
+DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 
 
 def _cache_key(token: str) -> str:
@@ -25,6 +26,10 @@ def _cache_key(token: str) -> str:
 
 async def require_auth(request: Request) -> None:
     """FastAPI dependency that validates a PocketID access token."""
+
+    # Skip auth in dev mode
+    if DEV_MODE:
+        return
 
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):

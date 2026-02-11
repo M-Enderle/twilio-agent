@@ -1,3 +1,7 @@
+<script lang="ts">
+	import { dev } from "$app/environment";
+</script>
+
 <div class="flex min-h-screen items-center justify-center bg-white">
 	<div class="flex flex-col items-center gap-8 p-12">
 		<img
@@ -12,5 +16,13 @@
 		>
 			Mit PocketID anmelden
 		</a>
+		{#if dev}
+			<a
+				href="/auth/dev-skip"
+				class="rounded-lg border border-gray-300 px-8 py-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100"
+			>
+				Login überspringen (Dev)
+			</a>
+		{/if}
 	</div>
 </div>

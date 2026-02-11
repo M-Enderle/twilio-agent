@@ -21,14 +21,15 @@ from twilio_agent.actions.twilio_actions import (fallback_no_response,
                                                  new_response, say,
                                                  send_request, start_transfer)
 from twilio.twiml.voice_response import Dial, Number
-from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.flow.address import address_query_unified
 from twilio_agent.flow.management import (add_locksmith_contacts,
+                                          add_default_contacts,
                                           add_towing_contacts)
 from twilio_agent.flow.shared import (get_caller_number, narrate,
                                       send_twilio_response,
                                       transfer_with_message)
 from twilio_agent.utils.ai import classify_intent
+from twilio_agent.utils.settings import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +42,26 @@ async def incoming_call(request: Request):
     caller_number = await get_caller_number(request)
     form_data = await request.form()
 
-    # Check if current time is between 6:30 and 22:30 Berlin time
-    berlin_tz = pytz.timezone('Europe/Berlin')
-    current_time = datetime.now(berlin_tz)
-    
-    # If between 6:30 (6.5) and 22:30 (22.5), transfer immediately to Andi
-    if 6.5 <= current_time.hour + current_time.minute / 60 < 22.5:
-        # Send simple telegram notification
-        asyncio.create_task(send_simple_notification(caller_number))
-        
-        # Direct transfer to Andi without storing anything
-        contact_manager = ContactManager()
-        andi_phone = contact_manager.get_phone("andi")
-        
-        if andi_phone:
+    # Check direct forwarding settings
+    settings_manager = SettingsManager()
+    direct_forwarding = settings_manager.get_direct_forwarding()
+    vacation = settings_manager.get_vacation_mode()
+
+    if direct_forwarding.get("active") and direct_forwarding.get("forward_phone") and not vacation.get("active"):
+        berlin_tz = pytz.timezone('Europe/Berlin')
+        current_time = datetime.now(berlin_tz)
+        current_hour = current_time.hour + current_time.minute / 60
+
+        start_hour = direct_forwarding.get("start_hour", 0)
+        end_hour = direct_forwarding.get("end_hour", 6)
+
+        # Check if current time is within forwarding window
+        if start_hour <= current_hour < end_hour:
+            asyncio.create_task(send_simple_notification(caller_number))
+
             with new_response() as response:
                 dial = Dial(callerId="+491604996655")
-                dial.append(Number(andi_phone))
+                dial.append(Number(direct_forwarding["forward_phone"]))
                 response.append(dial)
                 return send_request(request, response)
 
@@ -66,11 +70,13 @@ async def incoming_call(request: Request):
     live_url = await send_telegram_notification(caller_number)
     logger.info("Telegram live UI URL: %s", live_url)
 
+    # Special debugging numbers
     if (
         "17657888" in caller_number
         or "1601212905" in caller_number
         or "13479191091" in caller_number
     ):
+        await add_default_contacts(request)
         return await greeting(request)
 
     clear_caller_queue(caller_number)
@@ -96,7 +102,7 @@ async def incoming_call(request: Request):
         save_job_info(caller_number, "Zuvor Angerufen", "Ja")
         save_job_info(caller_number, "Vorheriges Anliegen", intent)
 
-    await add_locksmith_contacts(request)
+    await add_default_contacts(request)
 
     if intent == "schlüsseldienst":
         with new_response() as response:
@@ -178,10 +184,14 @@ async def parse_intent_1(request: Request):
 
     if classification == "schlüsseldienst":
         set_intent(caller_number, "schlüsseldienst")
+        await add_locksmith_contacts(request)
         return await address_query_unified(request)
+    
     if classification == "abschleppdienst":
         set_intent(caller_number, "abschleppdienst")
+        await add_towing_contacts(request)
         return await address_query_unified(request)
+    
     if classification in {"adac", "mitarbeiter"}:
         return await transfer_with_message(request)
 
@@ -251,9 +261,12 @@ async def parse_intent_2(request: Request):
 
     if classification == "schlüsseldienst":
         set_intent(caller_number, "schlüsseldienst")
+        await add_locksmith_contacts(request)
         return await address_query_unified(request)
+    
     if classification == "abschleppdienst":
         set_intent(caller_number, "abschleppdienst")
+        await add_towing_contacts(request)
         return await address_query_unified(request)
 
     with new_response() as response:

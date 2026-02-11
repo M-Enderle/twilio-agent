@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Request
@@ -18,6 +19,7 @@ from twilio_agent.actions.twilio_actions import (new_response,
                                                  send_request, start_transfer)
 from twilio_agent.flow.shared import get_caller_number, narrate
 from twilio_agent.utils.contacts import ContactManager
+from twilio_agent.utils.settings import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -25,31 +27,64 @@ router = APIRouter()
 
 
 async def add_locksmith_contacts(request: Request):
-    """Populate the transfer queue with locksmith contacts."""
+    """Populate the transfer queue with locksmith contacts from Redis order."""
     caller_number = await get_caller_number(request)
     clear_caller_queue(caller_number)
-    first_contact = get_job_info(caller_number, "Anbieter") or "Andi"
-    add_to_caller_queue(caller_number, first_contact)
-
-    if first_contact.lower() not in ["tiberius", "marcel"]:
-        add_to_caller_queue(caller_number, "Haas")
-        add_to_caller_queue(caller_number, "Wassermann")
 
     cm = ContactManager()
-    for contact in cm.get_contacts_for_category("locksmith"):
-        name = contact.get("name", "")
-        if name.lower() != first_contact.lower():
-            add_to_caller_queue(caller_number, name)
+    first_contact_name = get_job_info(caller_number, "Anbieter")
+    contacts = cm.get_contacts_for_category("locksmith")
+
+    # If a specific provider was determined (e.g. by pricing), add them first
+    if first_contact_name:
+        for contact in contacts:
+            if contact.get("name", "").lower() == first_contact_name.lower():
+                add_to_caller_queue(caller_number, contact.get("name", ""), contact.get("phone", ""))
+
+                # Add all fallbacks from this contact
+                fallbacks_json = contact.get("fallbacks_json", "")
+                if fallbacks_json:
+                    fallbacks = json.loads(fallbacks_json)
+                    for fb in fallbacks:
+                        add_to_caller_queue(caller_number, fb.get("name", ""), fb.get("phone", ""))
+                break
 
 
 async def add_towing_contacts(request: Request):
-    """Populate the transfer queue with towing contacts."""
+    """Populate the transfer queue with towing contacts from Redis order."""
     caller_number = await get_caller_number(request)
     clear_caller_queue(caller_number)
 
     cm = ContactManager()
     for contact in cm.get_contacts_for_category("towing"):
-        add_to_caller_queue(caller_number, contact.get("name", ""))
+        add_to_caller_queue(caller_number, contact.get("name", ""), contact.get("phone", ""))
+
+
+async def add_default_contacts(request: Request):
+    """Populate the transfer queue with the emergency contact from settings."""
+    caller_number = await get_caller_number(request)
+    clear_caller_queue(caller_number)
+
+    sm = SettingsManager()
+    emergency = sm.get_emergency_contact()
+    contact_id = emergency.get("contact_id")
+
+    if contact_id:
+        cm = ContactManager()
+        # Find the contact by ID across all categories to get the phone number
+        for category in ("locksmith", "towing"):
+            for contact in cm.get_contacts_for_category(category):
+                if contact.get("id") == contact_id:
+                    # Add the emergency contact first
+                    add_to_caller_queue(caller_number, contact.get("name", ""), contact.get("phone", ""))
+
+                    # Add all fallbacks from this contact
+                    fallbacks_json = contact.get("fallbacks_json", "")
+                    if fallbacks_json:
+                        fallbacks = json.loads(fallbacks_json)
+                        for fb in fallbacks:
+                            add_to_caller_queue(caller_number, fb.get("name", ""), fb.get("phone", ""))
+                    return
 
 
 async def end_call(request: Request, with_message: bool = True):
@@ -82,8 +117,8 @@ async def status(request: Request):
     return JSONResponse(content={"status": "ok"})
 
 
-@router.api_route("/parse-transfer-call/{name}", methods=["GET", "POST"])
-async def parse_transfer_call(request: Request, name: str):
+@router.api_route("/parse-transfer-call/{name}/{phone}", methods=["GET", "POST"])
+async def parse_transfer_call(request: Request, name: str, phone: str):
     """Handle the status callback for each attempted transfer."""
     form_data = await request.form()
     caller_number = await get_caller_number(request)
@@ -116,11 +151,9 @@ async def parse_transfer_call(request: Request, name: str):
     save_job_info(caller_number, "Erfolgreich weitergeleitet", "Ja")
     twilio_message(caller_number, f"Erfolgreich weitergeleitet an {name}")
 
-    contact_manager = ContactManager()
-    transferred_phone = contact_manager.get_phone(name)
-    send_job_details_sms(caller_number, transferred_phone)
+    send_job_details_sms(caller_number, phone)
     set_transferred_to(caller_number, name)
-    logger.info("Job details SMS sent to %s", transferred_phone)
+    logger.info("Job details SMS sent to %s", phone)
 
     with new_response() as response:
         response.hangup()

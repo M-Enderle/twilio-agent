@@ -1,4 +1,4 @@
-import type { Contact, ActiveHoursConfig, VacationMode, SystemStatus, Category } from "./types";
+import type { Contact, ActiveHoursConfig, VacationMode, EmergencyContact, DirectForwarding, SystemStatus, Category, PricingConfig } from "./types";
 
 function getApiBase(): string {
 	if (typeof window === "undefined") {
@@ -93,7 +93,77 @@ export function updateActiveHours(config: ActiveHoursConfig): Promise<ActiveHour
 	});
 }
 
+// Emergency contact
+export function getEmergencyContact(): Promise<EmergencyContact> {
+	return request("/settings/emergency-contact");
+}
+
+export function updateEmergencyContact(config: EmergencyContact): Promise<EmergencyContact> {
+	return request("/settings/emergency-contact", {
+		method: "PUT",
+		body: JSON.stringify(config),
+	});
+}
+
+// Direct forwarding
+export function getDirectForwarding(): Promise<DirectForwarding> {
+	return request("/settings/direct-forwarding");
+}
+
+export function updateDirectForwarding(config: DirectForwarding): Promise<DirectForwarding> {
+	return request("/settings/direct-forwarding", {
+		method: "PUT",
+		body: JSON.stringify(config),
+	});
+}
+
 // Status
 export function getStatus(): Promise<SystemStatus> {
 	return request("/status");
+}
+
+// Geocoding
+export interface GeocodeResult {
+	latitude: number;
+	longitude: number;
+	formatted_address: string;
+}
+
+export function geocodeAddress(address: string): Promise<GeocodeResult> {
+	return request("/geocode", {
+		method: "POST",
+		body: JSON.stringify({ address }),
+	});
+}
+
+// Pricing
+export function getPricing(): Promise<PricingConfig> {
+	return request("/settings/pricing");
+}
+
+export function updatePricing(config: PricingConfig): Promise<PricingConfig> {
+	return request("/settings/pricing", {
+		method: "PUT",
+		body: JSON.stringify(config),
+	});
+}
+
+// Service Territories (driving time grid cache)
+export interface TerritoryData {
+	grid: Array<{ lat: number; lng: number; contactIndex: number }>;
+	contacts_hash: string;
+	computed_at: string | null;
+	is_partial?: boolean;
+	total_points?: number;
+}
+
+export function getTerritories(category: Category): Promise<TerritoryData> {
+	return request(`/territories/${category}`);
+}
+
+export function saveTerritories(category: Category, data: TerritoryData): Promise<{ status: string }> {
+	return request(`/territories/${category}`, {
+		method: "POST",
+		body: JSON.stringify(data),
+	});
 }

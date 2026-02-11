@@ -91,14 +91,7 @@ def create_app() -> FastAPI:
         if data is None:
             raise HTTPException(status_code=404, detail="Audio not found")
         return Response(content=data, media_type="audio/mpeg")
-
-    @application.on_event("startup")
-    async def startup_migrate_contacts():
-        try:
-            ContactManager().migrate_from_yaml()
-        except Exception as e:
-            logger.warning("Contact migration on startup failed: %s", e)
-
+    
     @application.get("/health")
     async def health_check():
         """Simple health check used by monitoring and load balancers."""

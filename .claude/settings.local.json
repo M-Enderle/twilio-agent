@@ -17,7 +17,10 @@
       "Bash(lsof:*)",
       "Bash(docker-compose ps:*)",
       "Bash(curl:*)",
-      "Bash(docker compose:*)"
+      "Bash(docker compose:*)",
+      "Bash(npm run check:*)",
+      "Bash(npm run build:*)",
+      "WebFetch(domain:project-osrm.org)"
     ]
   }
 }

@@ -1,27 +1,52 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import type { ActiveHoursConfig, VacationMode } from "$lib/types";
-	import { getActiveHours, updateActiveHours, getVacationMode, updateVacationMode } from "$lib/api";
+	import type { ActiveHoursConfig, VacationMode, EmergencyContact, DirectForwarding, Contact } from "$lib/types";
+	import { getActiveHours, updateActiveHours, getVacationMode, updateVacationMode, getEmergencyContact, updateEmergencyContact, getDirectForwarding, updateDirectForwarding, getContacts } from "$lib/api";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import { Input } from "$lib/components/ui/input/index.js";
 	import { Label } from "$lib/components/ui/label/index.js";
 	import { Switch } from "$lib/components/ui/switch/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
+	import { Separator } from "$lib/components/ui/separator/index.js";
+	import SunIcon from "@lucide/svelte/icons/sun";
+	import MoonIcon from "@lucide/svelte/icons/moon";
+	import ClockIcon from "@lucide/svelte/icons/clock";
+	import PalmtreeIcon from "@lucide/svelte/icons/palmtree";
+	import PhoneIcon from "@lucide/svelte/icons/phone";
+	import CheckIcon from "@lucide/svelte/icons/check";
+	import LoaderIcon from "@lucide/svelte/icons/loader";
+	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
+	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
+	import ForwardIcon from "@lucide/svelte/icons/forward";
 
 	let config = $state<ActiveHoursConfig>({ day_start: 7, day_end: 20, twenty_four_seven: false });
-	let vacation = $state<VacationMode>({ active: false, substitute_phone: "", note: "" });
+	let vacation = $state<VacationMode>({ active: false, substitute_phone: "" });
+	let emergencyContact = $state<EmergencyContact>({ contact_id: "", contact_name: "" });
+	let directForwarding = $state<DirectForwarding>({ active: false, forward_phone: "", start_hour: 0, end_hour: 6 });
+	let contacts = $state<Contact[]>([]);
 	let loading = $state(true);
 	let saving = $state(false);
 	let savingVacation = $state(false);
+	let savingEmergency = $state(false);
+	let savingForwarding = $state(false);
 	let error = $state("");
 	let success = $state("");
 
 	async function load() {
 		try {
-			const [hours, vac] = await Promise.all([getActiveHours(), getVacationMode()]);
+			const [hours, vac, emergency, forwarding, allContacts] = await Promise.all([
+				getActiveHours(),
+				getVacationMode(),
+				getEmergencyContact(),
+				getDirectForwarding(),
+				getContacts()
+			]);
 			config = hours;
 			vacation = vac;
+			emergencyContact = emergency;
+			directForwarding = forwarding;
+			contacts = Object.values(allContacts).flat().filter(c => !c.fallback);
 			error = "";
 		} catch (e: any) {
 			error = e.message;
@@ -62,115 +87,426 @@
 		}
 	}
 
-	const currentMode = $derived(
-		config.twenty_four_seven ? "24/7" : (() => {
-			const now = new Date();
-			const hour = now.getHours();
-			return (hour >= config.day_start && hour < config.day_end) ? "Tag" : "Nacht";
-		})()
-	);
+	async function saveEmergency() {
+		savingEmergency = true;
+		success = "";
+		error = "";
+		try {
+			await updateEmergencyContact(emergencyContact);
+			success = "Notfallkontakt gespeichert";
+			setTimeout(() => { success = ""; }, 3000);
+		} catch (e: any) {
+			error = e.message;
+		} finally {
+			savingEmergency = false;
+		}
+	}
+
+	async function saveForwarding() {
+		savingForwarding = true;
+		success = "";
+		error = "";
+		try {
+			await updateDirectForwarding(directForwarding);
+			success = "Direkte Weiterleitung gespeichert";
+			setTimeout(() => { success = ""; }, 3000);
+		} catch (e: any) {
+			error = e.message;
+		} finally {
+			savingForwarding = false;
+		}
+	}
+
+	function handleEmergencySelect(e: Event) {
+		const select = e.target as HTMLSelectElement;
+		const contact = contacts.find(c => c.id === select.value);
+		if (contact) {
+			emergencyContact = { contact_id: contact.id, contact_name: contact.name };
+		} else {
+			emergencyContact = { contact_id: "", contact_name: "" };
+		}
+	}
+
+	const currentMode = $derived((() => {
+		const now = new Date();
+		const hour = now.getHours();
+		return (hour >= config.day_start && hour < config.day_end) ? "Tag" : "Nacht";
+	})());
+
+	const currentHour = $derived(new Date().getHours());
+
+	// Calculate time bar percentages
+	const dayStartPercent = $derived((config.day_start / 24) * 100);
+	const dayEndPercent = $derived((config.day_end / 24) * 100);
+	const currentHourPercent = $derived((currentHour / 24) * 100);
 </script>
 
-<div class="space-y-8">
+<div class="space-y-8 max-w-4xl mx-auto">
 	<div>
 		<h2 class="text-3xl font-bold tracking-tight">Einstellungen</h2>
 		<p class="text-muted-foreground">Aktive Zeiten, Urlaubsmodus und Tarifmodus konfigurieren</p>
 	</div>
 
 	{#if error}
-		<div class="rounded-md bg-red-50 p-4 text-red-800 text-sm">{error}</div>
+		<div class="rounded-lg bg-red-50 border border-red-200 p-4 flex items-center gap-3">
+			<AlertCircleIcon class="h-5 w-5 text-red-600 shrink-0" />
+			<span class="text-red-800 text-sm">{error}</span>
+		</div>
 	{/if}
 	{#if success}
-		<div class="rounded-md bg-green-50 p-4 text-green-800 text-sm">{success}</div>
+		<div class="rounded-lg bg-green-50 border border-green-200 p-4 flex items-center gap-3">
+			<CheckIcon class="h-5 w-5 text-green-600 shrink-0" />
+			<span class="text-green-800 text-sm">{success}</span>
+		</div>
 	{/if}
 
 	{#if loading}
-		<p class="text-muted-foreground">Laden...</p>
+		<div class="flex items-center justify-center py-12">
+			<LoaderIcon class="h-8 w-8 animate-spin text-muted-foreground" />
+		</div>
 	{:else}
-		<div class="grid gap-6 max-w-xl">
-			<!-- Current mode display -->
-			<Card.Root>
-				<Card.Header>
-					<Card.Title class="text-lg">Aktueller Modus</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					<div class="flex gap-2">
-						<Badge variant={currentMode === "Nacht" ? "destructive" : "default"} class="text-base px-4 py-1">
-							{currentMode}
-						</Badge>
-						{#if vacation.active}
-							<Badge class="bg-orange-100 text-orange-800 border-orange-200 text-base px-4 py-1">Urlaub</Badge>
-						{/if}
+		<!-- Status Overview -->
+		<div class="grid gap-4 md:grid-cols-3">
+			<!-- Current Mode Card -->
+			<Card.Root class={currentMode === "Nacht"
+				? "border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50"
+				: "border-amber-200 bg-gradient-to-br from-amber-50 to-yellow-50"}>
+				<Card.Content class="py-4">
+					<div class="flex items-center gap-4">
+						<div class={currentMode === "Nacht"
+							? "p-3 rounded-full bg-indigo-100"
+							: "p-3 rounded-full bg-amber-100"}>
+							{#if currentMode === "Nacht"}
+								<MoonIcon class="h-6 w-6 text-indigo-600" />
+							{:else}
+								<SunIcon class="h-6 w-6 text-amber-600" />
+							{/if}
+						</div>
+						<div>
+							<p class="text-sm font-medium text-muted-foreground">Aktueller Modus</p>
+							<p class="text-2xl font-bold">{currentMode === "Tag" ? "Tagestarif" : "Nachttarif"}</p>
+						</div>
 					</div>
 				</Card.Content>
 			</Card.Root>
 
+			<!-- Active Hours Card -->
+			<Card.Root class="border-slate-200">
+				<Card.Content class="py-4">
+					<div class="flex items-center gap-4">
+						<div class="p-3 rounded-full bg-slate-100">
+							<ClockIcon class="h-6 w-6 text-slate-600" />
+						</div>
+						<div>
+							<p class="text-sm font-medium text-muted-foreground">Tageszeit</p>
+							<p class="text-2xl font-bold">{config.day_start}:00 - {config.day_end}:00</p>
+						</div>
+					</div>
+				</Card.Content>
+			</Card.Root>
+
+			<!-- Vacation Status Card -->
+			<Card.Root class={vacation.active
+				? "border-orange-200 bg-gradient-to-br from-orange-50 to-amber-50"
+				: "border-slate-200"}>
+				<Card.Content class="py-4">
+					<div class="flex items-center gap-4">
+						<div class={vacation.active ? "p-3 rounded-full bg-orange-100" : "p-3 rounded-full bg-slate-100"}>
+							<PalmtreeIcon class={vacation.active ? "h-6 w-6 text-orange-600" : "h-6 w-6 text-slate-600"} />
+						</div>
+						<div>
+							<p class="text-sm font-medium text-muted-foreground">Urlaubsmodus</p>
+							<p class="text-2xl font-bold">{vacation.active ? "Aktiv" : "Inaktiv"}</p>
+						</div>
+					</div>
+				</Card.Content>
+			</Card.Root>
+		</div>
+
+		<Separator />
+
+		<div class="grid gap-6 lg:grid-cols-2">
 			<!-- Vacation mode -->
-			<Card.Root>
+			<Card.Root class={vacation.active ? "border-orange-200" : ""}>
 				<Card.Header>
-					<Card.Title class="text-lg">Urlaubsmodus</Card.Title>
-					<Card.Description>Alle Anrufe an eine Vertretungsnummer weiterleiten</Card.Description>
+					<div class="flex items-center gap-3">
+						<div class={vacation.active ? "p-2 rounded-lg bg-orange-100" : "p-2 rounded-lg bg-slate-100"}>
+							<PalmtreeIcon class={vacation.active ? "h-5 w-5 text-orange-600" : "h-5 w-5 text-slate-600"} />
+						</div>
+						<div>
+							<Card.Title>Urlaubsmodus</Card.Title>
+							<Card.Description>Anrufe an Vertretung weiterleiten</Card.Description>
+						</div>
+					</div>
+				</Card.Header>
+				<Card.Content>
+					<div class="grid gap-5">
+						<div class="flex items-center justify-between p-4 rounded-lg bg-muted/50">
+							<div class="flex items-center gap-3">
+								<Switch id="vacation-toggle" bind:checked={vacation.active} />
+								<Label for="vacation-toggle" class="font-medium cursor-pointer">
+									{vacation.active ? "Urlaubsmodus aktiv" : "Urlaubsmodus deaktiviert"}
+								</Label>
+							</div>
+							{#if vacation.active}
+								<Badge class="bg-orange-100 text-orange-700 border-orange-200">Aktiv</Badge>
+							{/if}
+						</div>
+						{#if vacation.active}
+							<div class="grid gap-4 p-4 rounded-lg border border-orange-200 bg-orange-50/50">
+								<div class="grid gap-2">
+									<Label for="substitute_phone" class="flex items-center gap-2">
+										<PhoneIcon class="h-4 w-4 text-muted-foreground" />
+										Vertretungs-Telefon
+									</Label>
+									<Input id="substitute_phone" bind:value={vacation.substitute_phone} placeholder="+49 123 456789" class="bg-white" />
+								</div>
+							</div>
+						{/if}
+					</div>
+				</Card.Content>
+				<Card.Footer>
+					<Button onclick={saveVacation} disabled={savingVacation} class="w-full">
+						{#if savingVacation}
+							<LoaderIcon class="h-4 w-4 mr-2 animate-spin" />
+							Speichern...
+						{:else}
+							<CheckIcon class="h-4 w-4 mr-2" />
+							Urlaubsmodus speichern
+						{/if}
+					</Button>
+				</Card.Footer>
+			</Card.Root>
+
+			<!-- Emergency contact -->
+			<Card.Root class={emergencyContact.contact_id ? "border-red-200" : ""}>
+				<Card.Header>
+					<div class="flex items-center gap-3">
+						<div class={emergencyContact.contact_id ? "p-2 rounded-lg bg-red-100" : "p-2 rounded-lg bg-slate-100"}>
+							<ShieldAlertIcon class={emergencyContact.contact_id ? "h-5 w-5 text-red-600" : "h-5 w-5 text-slate-600"} />
+						</div>
+						<div>
+							<Card.Title>Notfallkontakt</Card.Title>
+							<Card.Description>Kontakt für Notfälle außerhalb der Geschäftszeiten</Card.Description>
+						</div>
+					</div>
 				</Card.Header>
 				<Card.Content>
 					<div class="grid gap-4">
-						<div class="flex items-center gap-3">
-							<Switch bind:checked={vacation.active} />
-							<span class="text-sm">{vacation.active ? "Aktiviert" : "Deaktiviert"}</span>
+						<div class="grid gap-2">
+							<Label for="emergency-contact">Kontakt auswählen</Label>
+							<select
+								id="emergency-contact"
+								class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+								value={emergencyContact.contact_id}
+								onchange={handleEmergencySelect}
+							>
+								<option value="">-- Kein Notfallkontakt --</option>
+								{#each contacts as contact}
+									<option value={contact.id}>{contact.name}</option>
+								{/each}
+							</select>
 						</div>
-						{#if vacation.active}
-							<div class="grid gap-2">
-								<Label for="substitute_phone">Vertretungs-Telefon</Label>
-								<Input id="substitute_phone" bind:value={vacation.substitute_phone} placeholder="+49..." />
-							</div>
-							<div class="grid gap-2">
-								<Label for="vacation_note">Notiz</Label>
-								<Input id="vacation_note" bind:value={vacation.note} placeholder="z.B. Urlaub bis 20.02." />
+						{#if emergencyContact.contact_id}
+							<div class="p-3 rounded-lg bg-red-50 border border-red-200">
+								<p class="text-sm text-red-700">
+									<span class="font-medium">{emergencyContact.contact_name}</span> wird im Zweifelsfall kontaktiert.
+								</p>
 							</div>
 						{/if}
-						<Button onclick={saveVacation} disabled={savingVacation}>
-							{savingVacation ? "Speichern..." : "Urlaubsmodus speichern"}
-						</Button>
 					</div>
 				</Card.Content>
+				<Card.Footer>
+					<Button onclick={saveEmergency} disabled={savingEmergency} class="w-full">
+						{#if savingEmergency}
+							<LoaderIcon class="h-4 w-4 mr-2 animate-spin" />
+							Speichern...
+						{:else}
+							<CheckIcon class="h-4 w-4 mr-2" />
+							Notfallkontakt speichern
+						{/if}
+					</Button>
+				</Card.Footer>
 			</Card.Root>
 
-			<!-- Active hours -->
-			<Card.Root>
+			<!-- Direct forwarding -->
+			<Card.Root class={directForwarding.active ? "border-blue-200" : ""}>
 				<Card.Header>
-					<Card.Title class="text-lg">Aktive Zeiten</Card.Title>
-					<Card.Description>Tagestarif gilt zwischen diesen Uhrzeiten</Card.Description>
-				</Card.Header>
-				<Card.Content>
-					<div class="grid grid-cols-2 gap-4">
-						<div class="grid gap-2">
-							<Label for="day_start">Start (Uhr)</Label>
-							<Input id="day_start" type="number" bind:value={config.day_start} disabled={config.twenty_four_seven} />
-						</div>
-						<div class="grid gap-2">
-							<Label for="day_end">Ende (Uhr)</Label>
-							<Input id="day_end" type="number" bind:value={config.day_end} disabled={config.twenty_four_seven} />
-						</div>
-					</div>
-				</Card.Content>
-			</Card.Root>
-
-			<!-- 24/7 toggle -->
-			<Card.Root>
-				<Card.Header>
-					<Card.Title class="text-lg">24/7 Modus</Card.Title>
-					<Card.Description>Wenn aktiviert, gilt immer der Tagestarif</Card.Description>
-				</Card.Header>
-				<Card.Content>
 					<div class="flex items-center gap-3">
-						<Switch bind:checked={config.twenty_four_seven} />
-						<span class="text-sm">{config.twenty_four_seven ? "Aktiviert" : "Deaktiviert"}</span>
+						<div class={directForwarding.active ? "p-2 rounded-lg bg-blue-100" : "p-2 rounded-lg bg-slate-100"}>
+							<ForwardIcon class={directForwarding.active ? "h-5 w-5 text-blue-600" : "h-5 w-5 text-slate-600"} />
+						</div>
+						<div>
+							<Card.Title>Direkte Weiterleitung</Card.Title>
+							<Card.Description>Anrufe in einem Zeitfenster direkt weiterleiten</Card.Description>
+						</div>
+					</div>
+				</Card.Header>
+				<Card.Content>
+					<div class="grid gap-5">
+						<div class="flex items-center justify-between p-4 rounded-lg bg-muted/50">
+							<div class="flex items-center gap-3">
+								<Switch id="forwarding-toggle" bind:checked={directForwarding.active} />
+								<Label for="forwarding-toggle" class="font-medium cursor-pointer">
+									{directForwarding.active ? "Weiterleitung aktiv" : "Weiterleitung deaktiviert"}
+								</Label>
+							</div>
+							{#if directForwarding.active}
+								<Badge class="bg-blue-100 text-blue-700 border-blue-200">Aktiv</Badge>
+							{/if}
+						</div>
+						{#if directForwarding.active}
+							<div class="grid gap-4 p-4 rounded-lg border border-blue-200 bg-blue-50/50">
+								<div class="grid gap-2">
+									<Label for="forward_phone" class="flex items-center gap-2">
+										<PhoneIcon class="h-4 w-4 text-muted-foreground" />
+										Weiterleitungs-Telefon
+									</Label>
+									<Input id="forward_phone" bind:value={directForwarding.forward_phone} placeholder="+49 123 456789" class="bg-white" />
+								</div>
+								<div class="grid grid-cols-2 gap-4">
+									<div class="grid gap-2">
+										<Label for="start_hour" class="flex items-center gap-2">
+											<ClockIcon class="h-4 w-4 text-muted-foreground" />
+											Von
+										</Label>
+										<select
+											id="start_hour"
+											class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+											value={directForwarding.start_hour}
+											onchange={(e) => directForwarding.start_hour = parseFloat((e.target as HTMLSelectElement).value)}
+										>
+											{#each Array.from({ length: 48 }, (_, i) => i * 0.5) as time}
+												<option value={time}>{Math.floor(time)}:{time % 1 === 0 ? '00' : '30'} Uhr</option>
+											{/each}
+										</select>
+									</div>
+									<div class="grid gap-2">
+										<Label for="end_hour" class="flex items-center gap-2">
+											<ClockIcon class="h-4 w-4 text-muted-foreground" />
+											Bis
+										</Label>
+										<select
+											id="end_hour"
+											class="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+											value={directForwarding.end_hour}
+											onchange={(e) => directForwarding.end_hour = parseFloat((e.target as HTMLSelectElement).value)}
+										>
+											{#each Array.from({ length: 49 }, (_, i) => i * 0.5) as time}
+												<option value={time}>{Math.floor(time)}:{time % 1 === 0 ? '00' : '30'} Uhr</option>
+											{/each}
+										</select>
+									</div>
+								</div>
+							</div>
+						{/if}
 					</div>
 				</Card.Content>
+				<Card.Footer>
+					<Button onclick={saveForwarding} disabled={savingForwarding} class="w-full">
+						{#if savingForwarding}
+							<LoaderIcon class="h-4 w-4 mr-2 animate-spin" />
+							Speichern...
+						{:else}
+							<CheckIcon class="h-4 w-4 mr-2" />
+							Weiterleitung speichern
+						{/if}
+					</Button>
+				</Card.Footer>
 			</Card.Root>
 
-			<Button onclick={save} disabled={saving}>
-				{saving ? "Speichern..." : "Speichern"}
-			</Button>
+			<!-- Active hours configuration -->
+			<Card.Root>
+				<Card.Header>
+					<div class="flex items-center gap-3">
+						<div class="p-2 rounded-lg bg-slate-100">
+							<ClockIcon class="h-5 w-5 text-slate-600" />
+						</div>
+						<div>
+							<Card.Title>Aktive Zeiten</Card.Title>
+							<Card.Description>Tagestarif-Zeitfenster konfigurieren</Card.Description>
+						</div>
+					</div>
+				</Card.Header>
+				<Card.Content>
+					<div class="grid gap-5">
+						<!-- Time inputs -->
+						<div class="grid grid-cols-2 gap-4">
+							<div class="grid gap-2">
+								<Label for="day_start" class="flex items-center gap-2">
+									<SunIcon class="h-4 w-4 text-amber-500" />
+									Tagesbeginn
+								</Label>
+								<div class="relative">
+									<Input id="day_start" type="number" min="0" max="23" bind:value={config.day_start} class="pr-12" />
+									<span class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">Uhr</span>
+								</div>
+							</div>
+							<div class="grid gap-2">
+								<Label for="day_end" class="flex items-center gap-2">
+									<MoonIcon class="h-4 w-4 text-indigo-500" />
+									Tagesende
+								</Label>
+								<div class="relative">
+									<Input id="day_end" type="number" min="0" max="24" bind:value={config.day_end} class="pr-12" />
+									<span class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">Uhr</span>
+								</div>
+							</div>
+						</div>
+
+						<!-- Visual time bar -->
+						<div class="space-y-2">
+							<p class="text-sm text-muted-foreground">Tarifübersicht</p>
+							<div class="relative h-10 rounded-lg overflow-hidden bg-indigo-100">
+								<!-- Day period -->
+								<div
+									class="absolute top-0 bottom-0 bg-gradient-to-r from-amber-300 to-amber-400"
+									style="left: {dayStartPercent}%; width: {dayEndPercent - dayStartPercent}%"
+								></div>
+								<!-- Current time indicator -->
+								<div
+									class="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
+									style="left: {currentHourPercent}%"
+								>
+									<div class="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-red-500"></div>
+								</div>
+							</div>
+							<div class="flex justify-between text-xs text-muted-foreground">
+								<span>0:00</span>
+								<span>6:00</span>
+								<span>12:00</span>
+								<span>18:00</span>
+								<span>24:00</span>
+							</div>
+							<div class="flex items-center gap-4 text-xs pt-2">
+								<div class="flex items-center gap-1.5">
+									<div class="w-3 h-3 rounded bg-gradient-to-r from-amber-300 to-amber-400"></div>
+									<span>Tagestarif</span>
+								</div>
+								<div class="flex items-center gap-1.5">
+									<div class="w-3 h-3 rounded bg-indigo-100"></div>
+									<span>Nachttarif</span>
+								</div>
+								<div class="flex items-center gap-1.5">
+									<div class="w-3 h-3 rounded bg-red-500"></div>
+									<span>Jetzt</span>
+								</div>
+							</div>
+						</div>
+					</div>
+				</Card.Content>
+				<Card.Footer>
+					<Button onclick={save} disabled={saving} class="w-full">
+						{#if saving}
+							<LoaderIcon class="h-4 w-4 mr-2 animate-spin" />
+							Speichern...
+						{:else}
+							<CheckIcon class="h-4 w-4 mr-2" />
+							Zeiten speichern
+						{/if}
+					</Button>
+				</Card.Footer>
+			</Card.Root>
 		</div>
 	{/if}
 </div>

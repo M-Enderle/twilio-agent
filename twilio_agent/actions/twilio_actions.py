@@ -19,11 +19,8 @@ from twilio_agent.actions.redis_actions import (agent_message, delete_job_info,
                                                 get_shared_location,
                                                 google_message, save_job_info,
                                                 save_location)
-from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.eleven import cache_manager, generate_speech
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
-
-contact_manager = ContactManager()
 
 dotenv.load_dotenv()
 logger = logging.getLogger("uvicorn")
@@ -252,21 +249,25 @@ Wartezeit: {get_job_info(caller, 'Wartezeit')} min
 
 
 def start_transfer(response: VoiceResponse, caller: str) -> str:
-    next_caller = get_next_caller_in_queue(caller)
-    if not next_caller:
+    next_contact = get_next_caller_in_queue(caller)
+    if not next_contact:
         return "no_more_agents"
+
+    name = next_contact.get("name", "")
+    phone = next_contact.get("phone", "")
 
     if get_job_info(caller, "Erfolgreich weitergeleitet") == "Nein":
         timeout = 7
     else:
         timeout = 17
 
+    # URL-encode name for the callback
+    from urllib.parse import quote
     tr = Dial(
-        action=f"{server_url}/parse-transfer-call/{next_caller}",
+        action=f"{server_url}/parse-transfer-call/{quote(name)}/{quote(phone)}",
         timeout=timeout,
         callerId="+491604996655",
     )
-    phone_number = contact_manager.get_phone(next_caller)
-    tr.append(Number(phone_number))
+    tr.append(Number(phone))
     response.append(tr)
     return "transferring"

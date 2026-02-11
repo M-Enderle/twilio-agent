@@ -349,15 +349,6 @@ async def parse_plz_unified(request: Request):
         location_dict["zipcode"] = location.plz
         location_dict["place"] = location.ort
         save_location(caller_number, location_dict)
-        place = " ".join(
-            filter(
-                None,
-                [
-                    " ".join(str(location.plz)) if location.plz else None,
-                    location.ort,
-                ],
-            )
-        ).strip()
         google_message(
             caller_number,
             f"Standort über PLZ gefunden: {location.formatted_address} ({location.google_maps_link})",

@@ -1,29 +1,32 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import type { Contact, Category } from "$lib/types";
-	import { getContacts, createContact, updateContact, deleteContact } from "$lib/api";
-	import ContactTable from "$lib/components/ContactTable.svelte";
-	import ContactForm from "$lib/components/ContactForm.svelte";
+	import type { ContactWithCoords, Category } from "$lib/types";
+	import { getContacts } from "$lib/api";
+	import ContactMap from "$lib/components/ContactMap.svelte";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import { Separator } from "$lib/components/ui/separator/index.js";
-	import * as AlertDialog from "$lib/components/ui/alert-dialog/index.js";
+	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import KeyIcon from "@lucide/svelte/icons/key";
+	import TruckIcon from "@lucide/svelte/icons/truck";
 
-	let contacts = $state<Record<Category, Contact[]>>({ locksmith: [], towing: [] });
+	let contacts = $state<Record<Category, ContactWithCoords[]>>({
+		locksmith: [],
+		towing: [],
+	});
 	let loading = $state(true);
 	let error = $state("");
-
-	// Contact form state
-	let formOpen = $state(false);
-	let editingContact = $state<Contact | null>(null);
-	let formCategory = $state<Category>("locksmith");
-
-	// Delete confirm state
-	let deleteConfirmOpen = $state(false);
-	let deleteTarget = $state<{ category: Category; contact: Contact } | null>(null);
+	let selectedCategory = $state<Category>("locksmith");
+	let mapRef = $state<{ refresh: () => void } | null>(null);
 
 	async function loadContacts() {
 		try {
-			contacts = await getContacts() as Record<Category, Contact[]>;
+			const raw = await getContacts();
+			// Parse fallbacks_json for each contact
+			for (const category of Object.keys(raw) as Category[]) {
+				contacts[category] = raw[category].map((c) => ({
+					...c,
+					fallbacks: c.fallbacks_json ? JSON.parse(c.fallbacks_json) : [],
+				}));
+			}
 			error = "";
 		} catch (e: any) {
 			error = e.message;
@@ -34,113 +37,75 @@
 
 	onMount(loadContacts);
 
-	function openNewContact() {
-		editingContact = null;
-		formCategory = "locksmith";
-		formOpen = true;
+	function refreshMap() {
+		mapRef?.refresh();
 	}
 
-	function openEditContact(category: Category, contact: Contact) {
-		editingContact = contact;
-		formCategory = category;
-		formOpen = true;
-	}
+	// Count non-fallback contacts with coordinates for display (filtered by category)
+	const markerCount = $derived(
+		contacts[selectedCategory]
+			.filter((c) => !c.fallback && c.latitude && c.longitude).length
+	);
 
-	async function handleSaveContact(category: Category, data: Partial<Contact>) {
-		try {
-			if (editingContact) {
-				await updateContact(category, editingContact.id, data);
-			} else {
-				await createContact(category, data as any);
-			}
-			await loadContacts();
-		} catch (e: any) {
-			error = e.message;
-		}
-	}
+	const totalContacts = $derived(
+		contacts[selectedCategory]
+			.filter((c) => !c.fallback).length
+	);
 
-	function confirmDelete(category: Category, contact: Contact) {
-		deleteTarget = { category, contact };
-		deleteConfirmOpen = true;
-	}
-
-	async function handleDelete() {
-		if (!deleteTarget) return;
-		try {
-			await deleteContact(deleteTarget.category, deleteTarget.contact.id);
-			deleteConfirmOpen = false;
-			deleteTarget = null;
-			await loadContacts();
-		} catch (e: any) {
-			error = e.message;
-		}
-	}
-
-	const sections: { key: Category; label: string }[] = [
-		{ key: "locksmith", label: "Schlüsseldienst" },
-		{ key: "towing", label: "Abschleppdienst" },
-	];
+	// Filtered contacts for map
+	const filteredContacts = $derived({
+		locksmith: selectedCategory === "locksmith" ? contacts.locksmith : [],
+		towing: selectedCategory === "towing" ? contacts.towing : [],
+	} as Record<Category, ContactWithCoords[]>);
 </script>
 
-<div class="space-y-8">
-	<div class="flex items-center justify-between">
+<div class="h-[calc(100vh-8rem)] flex flex-col">
+	<div class="flex items-center justify-between mb-4">
 		<div>
 			<h2 class="text-3xl font-bold tracking-tight">Kontakte</h2>
-			<p class="text-muted-foreground">Verwalte die Dienstleister-Kontakte</p>
+			<p class="text-muted-foreground">
+				{markerCount} von {totalContacts} {selectedCategory === "locksmith" ? "Schlüsseldiensten" : "Abschleppdiensten"} auf der Karte
+			</p>
 		</div>
-		<Button onclick={openNewContact}>+ Kontakt</Button>
+		<div class="flex items-center gap-3">
+			<!-- Category Toggle -->
+			<div class="flex rounded-lg border bg-muted p-1">
+				<button
+					class="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors {selectedCategory === 'locksmith' ? 'bg-white shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => selectedCategory = "locksmith"}
+				>
+					<KeyIcon class="h-4 w-4" />
+					Schlüsseldienst
+				</button>
+				<button
+					class="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors {selectedCategory === 'towing' ? 'bg-white shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => selectedCategory = "towing"}
+				>
+					<TruckIcon class="h-4 w-4" />
+					Abschleppdienst
+				</button>
+			</div>
+			<!-- Refresh Button -->
+			<Button variant="outline" size="icon" onclick={refreshMap} title="Karte neu laden">
+				<RefreshCwIcon class="h-4 w-4" />
+			</Button>
+			<Button href="/kontakte/neu">+ Kontakt</Button>
+		</div>
 	</div>
 
 	{#if error}
-		<div class="rounded-md bg-red-50 p-4 text-red-800 text-sm">{error}</div>
+		<div class="rounded-md bg-red-50 p-4 text-red-800 text-sm mb-4">
+			{error}
+		</div>
 	{/if}
 
 	{#if loading}
-		<p class="text-muted-foreground">Laden...</p>
+		<div class="flex-1 flex items-center justify-center">
+			<p class="text-muted-foreground">Karte wird geladen...</p>
+		</div>
 	{:else}
-		{#each sections as section}
-			<div>
-				<h3 class="text-xl font-semibold mb-4">{section.label}</h3>
-				{#if contacts[section.key]?.length}
-					<ContactTable
-						contacts={contacts[section.key]}
-						category={section.key}
-						onedit={(contact) => openEditContact(section.key, contact)}
-						ondelete={(contact) => confirmDelete(section.key, contact)}
-						onreorder={loadContacts}
-					/>
-				{:else}
-					<p class="text-sm text-muted-foreground">Keine Kontakte vorhanden</p>
-				{/if}
-			</div>
-			{#if section.key !== "towing"}
-				<Separator />
-			{/if}
-		{/each}
+		<div class="flex-1 rounded-lg overflow-hidden border">
+			<ContactMap contacts={filteredContacts} category={selectedCategory} bind:this={mapRef} />
+		</div>
 	{/if}
 </div>
-
-<!-- Contact Form Dialog -->
-<ContactForm
-	bind:open={formOpen}
-	contact={editingContact}
-	bind:category={formCategory}
-	onsave={handleSaveContact}
-	onclose={() => { formOpen = false; }}
-/>
-
-<!-- Delete Confirmation -->
-<AlertDialog.Root bind:open={deleteConfirmOpen}>
-	<AlertDialog.Content>
-		<AlertDialog.Header>
-			<AlertDialog.Title>Kontakt löschen</AlertDialog.Title>
-			<AlertDialog.Description>
-				Möchtest du <strong>{deleteTarget?.contact.name}</strong> wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.
-			</AlertDialog.Description>
-		</AlertDialog.Header>
-		<AlertDialog.Footer>
-			<AlertDialog.Cancel>Abbrechen</AlertDialog.Cancel>
-			<AlertDialog.Action onclick={handleDelete} class="bg-destructive text-white hover:bg-destructive/90">Löschen</AlertDialog.Action>
-		</AlertDialog.Footer>
-	</AlertDialog.Content>
-</AlertDialog.Root>

@@ -4,6 +4,7 @@
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import UsersIcon from "@lucide/svelte/icons/users";
+	import EuroIcon from "@lucide/svelte/icons/euro";
 	import LogOutIcon from "@lucide/svelte/icons/log-out";
 	import { setToken } from "$lib/api";
 	import { onMount } from "svelte";
@@ -12,6 +13,7 @@
 
 	const navItems = [
 		{ href: "/kontakte", label: "Kontakte", icon: UsersIcon },
+		{ href: "/preise", label: "Preise", icon: EuroIcon },
 		{ href: "/einstellungen", label: "Einstellungen", icon: SettingsIcon },
 	];
 

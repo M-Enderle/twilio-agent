@@ -101,9 +101,44 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
 
 
 if __name__ == "__main__":
-    test_addresses = [
-        "87527",
-    ]
-    for addr in test_addresses:
-        result = get_geocode_result(addr)
-        print(f"Address: {addr}\nResult: {result}\n")
+    print("=== Location Utils Tests ===\n")
+
+    # Test API key
+    print("1. API Key:")
+    print(f"   Set: {bool(API_KEY)}")
+
+    # Test geocoding with address
+    print("\n2. get_geocode_result('Kempten'):")
+    try:
+        result = get_geocode_result("Kempten")
+        if result:
+            print(f"   Latitude: {result.latitude}")
+            print(f"   Longitude: {result.longitude}")
+            print(f"   Address: {result.formatted_address}")
+            print(f"   PLZ: {result.plz}")
+            print(f"   Ort: {result.ort}")
+            print(f"   Maps: {result.google_maps_link}")
+        else:
+            print("   No result found")
+    except Exception as e:
+        print(f"   Error: {e}")
+
+    # Test geocoding with PLZ
+    print("\n3. get_geocode_result('87435'):")
+    try:
+        result = get_geocode_result("87435")
+        if result:
+            print(f"   Latitude: {result.latitude}")
+            print(f"   Longitude: {result.longitude}")
+            print(f"   Address: {result.formatted_address}")
+            print(f"   PLZ: {result.plz}")
+            print(f"   Ort: {result.ort}")
+        else:
+            print("   No result found")
+    except Exception as e:
+        print(f"   Error: {e}")
+
+    # Test bounds
+    print("\n4. Search bounds (Bayern):")
+    print(f"   SW: {BOUNDS_SW}")
+    print(f"   NE: {BOUNDS_NE}")

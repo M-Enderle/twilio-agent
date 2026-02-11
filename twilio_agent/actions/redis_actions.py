@@ -189,20 +189,22 @@ def get_shared_location(call_number: str) -> dict:
     return None
 
 
-def add_to_caller_queue(caller: str, name: str):
+def add_to_caller_queue(caller: str, name: str, phone: str):
+    """Add a contact to the transfer queue with name and phone."""
     queue = json.loads(
         redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]"
     )
-    queue.append(name)
+    queue.append({"name": name, "phone": phone})
     redis.set(
         f"notdienststation:anrufe:{caller}:warteschlange",
         json.dumps(queue),
         ex=persistance_time,
     )
-    _set_hist_info(caller, "Warteschlange", queue)
+    _set_hist_info(caller, "Warteschlange", [c["name"] for c in queue])
 
 
-def get_next_caller_in_queue(caller: str) -> str:
+def get_next_caller_in_queue(caller: str) -> dict | None:
+    """Get next contact from queue. Returns {name, phone} or None."""
     queue_data = redis.get(f"notdienststation:anrufe:{caller}:warteschlange")
     queue = json.loads(queue_data.decode("utf-8")) if queue_data else []
     return queue[0] if queue else None

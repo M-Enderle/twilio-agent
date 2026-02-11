@@ -67,7 +67,7 @@ def transcribe_speech(recording_url: str) -> tuple[str, float]:
     start_time = time.time()
     logger.info(f"Starting ElevenLabs transcription for recording URL: {recording_url}")
     data = {
-        "model_id": "scribe_v1",
+        "model_id": "scribe_v2",
         "language_code": "deu",
         "tag_audio_events": "false",
         "cloud_storage_url": f"https://{ACCOUNT_SID}:{AUTH}@{recording_url.replace('https://','')}",
