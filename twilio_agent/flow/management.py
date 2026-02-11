@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_phone_for_contact(name: str, phone: str) -> str:
+    """Return substitute phone if vacation mode is active and contact is Andi."""
+    sm = SettingsManager()
+    vacation = sm.get_vacation_mode()
+    if vacation.get("active") and name.lower() == "andi":
+        logger.warning("Vacation mode active, substituting Andi's phone number with %s", vacation.get("substitute_phone", ""))
+        substitute = vacation.get("substitute_phone", "")
+        if substitute:
+            return substitute
+    return phone
+
+
 async def add_locksmith_contacts(request: Request):
     """Populate the transfer queue with locksmith contacts from Redis order."""
     caller_number = await get_caller_number(request)
@@ -39,14 +51,18 @@ async def add_locksmith_contacts(request: Request):
     if first_contact_name:
         for contact in contacts:
             if contact.get("name", "").lower() == first_contact_name.lower():
-                add_to_caller_queue(caller_number, contact.get("name", ""), contact.get("phone", ""))
+                name = contact.get("name", "")
+                phone = _get_phone_for_contact(name, contact.get("phone", ""))
+                add_to_caller_queue(caller_number, name, phone)
 
                 # Add all fallbacks from this contact
                 fallbacks_json = contact.get("fallbacks_json", "")
                 if fallbacks_json:
                     fallbacks = json.loads(fallbacks_json)
                     for fb in fallbacks:
-                        add_to_caller_queue(caller_number, fb.get("name", ""), fb.get("phone", ""))
+                        fb_name = fb.get("name", "")
+                        fb_phone = _get_phone_for_contact(fb_name, fb.get("phone", ""))
+                        add_to_caller_queue(caller_number, fb_name, fb_phone)
                 break
 
 
@@ -57,7 +73,9 @@ async def add_towing_contacts(request: Request):
 
     cm = ContactManager()
     for contact in cm.get_contacts_for_category("towing"):
-        add_to_caller_queue(caller_number, contact.get("name", ""), contact.get("phone", ""))
+        name = contact.get("name", "")
+        phone = _get_phone_for_contact(name, contact.get("phone", ""))
+        add_to_caller_queue(caller_number, name, phone)
 
 
 async def add_default_contacts(request: Request):
@@ -76,14 +94,18 @@ async def add_default_contacts(request: Request):
             for contact in cm.get_contacts_for_category(category):
                 if contact.get("id") == contact_id:
                     # Add the emergency contact first
-                    add_to_caller_queue(caller_number, contact.get("name", ""), contact.get("phone", ""))
+                    name = contact.get("name", "")
+                    phone = _get_phone_for_contact(name, contact.get("phone", ""))
+                    add_to_caller_queue(caller_number, name, phone)
 
                     # Add all fallbacks from this contact
                     fallbacks_json = contact.get("fallbacks_json", "")
                     if fallbacks_json:
                         fallbacks = json.loads(fallbacks_json)
                         for fb in fallbacks:
-                            add_to_caller_queue(caller_number, fb.get("name", ""), fb.get("phone", ""))
+                            fb_name = fb.get("name", "")
+                            fb_phone = _get_phone_for_contact(fb_name, fb.get("phone", ""))
+                            add_to_caller_queue(caller_number, fb_name, fb_phone)
                     return
 
 
