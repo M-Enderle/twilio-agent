@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import type { ActiveHoursConfig, VacationMode, EmergencyContact, DirectForwarding, Contact } from "$lib/types";
-	import { getActiveHours, updateActiveHours, getVacationMode, updateVacationMode, getEmergencyContact, updateEmergencyContact, getDirectForwarding, updateDirectForwarding, getContacts } from "$lib/api";
+	import { getActiveHours, getVacationMode, updateVacationMode, getEmergencyContact, updateEmergencyContact, getDirectForwarding, updateDirectForwarding, getContacts } from "$lib/api";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import { Input } from "$lib/components/ui/input/index.js";
@@ -26,7 +26,6 @@
 	let directForwarding = $state<DirectForwarding>({ active: false, forward_phone: "", start_hour: 0, end_hour: 6 });
 	let contacts = $state<Contact[]>([]);
 	let loading = $state(true);
-	let saving = $state(false);
 	let savingVacation = $state(false);
 	let savingEmergency = $state(false);
 	let savingForwarding = $state(false);
@@ -56,21 +55,6 @@
 	}
 
 	onMount(load);
-
-	async function save() {
-		saving = true;
-		success = "";
-		error = "";
-		try {
-			await updateActiveHours(config);
-			success = "Einstellungen gespeichert";
-			setTimeout(() => { success = ""; }, 3000);
-		} catch (e: any) {
-			error = e.message;
-		} finally {
-			saving = false;
-		}
-	}
 
 	async function saveVacation() {
 		savingVacation = true;
@@ -132,19 +116,12 @@
 		const hour = now.getHours();
 		return (hour >= config.day_start && hour < config.day_end) ? "Tag" : "Nacht";
 	})());
-
-	const currentHour = $derived(new Date().getHours());
-
-	// Calculate time bar percentages
-	const dayStartPercent = $derived((config.day_start / 24) * 100);
-	const dayEndPercent = $derived((config.day_end / 24) * 100);
-	const currentHourPercent = $derived((currentHour / 24) * 100);
 </script>
 
 <div class="space-y-8 max-w-4xl mx-auto">
 	<div>
 		<h2 class="text-3xl font-bold tracking-tight">Einstellungen</h2>
-		<p class="text-muted-foreground">Aktive Zeiten, Urlaubsmodus und Tarifmodus konfigurieren</p>
+		<p class="text-muted-foreground">Urlaubsmodus, Notfallkontakt und Weiterleitung konfigurieren</p>
 	</div>
 
 	{#if error}
@@ -415,98 +392,6 @@
 				</Card.Footer>
 			</Card.Root>
 
-			<!-- Active hours configuration -->
-			<Card.Root>
-				<Card.Header>
-					<div class="flex items-center gap-3">
-						<div class="p-2 rounded-lg bg-slate-100">
-							<ClockIcon class="h-5 w-5 text-slate-600" />
-						</div>
-						<div>
-							<Card.Title>Aktive Zeiten</Card.Title>
-							<Card.Description>Tagestarif-Zeitfenster konfigurieren</Card.Description>
-						</div>
-					</div>
-				</Card.Header>
-				<Card.Content>
-					<div class="grid gap-5">
-						<!-- Time inputs -->
-						<div class="grid grid-cols-2 gap-4">
-							<div class="grid gap-2">
-								<Label for="day_start" class="flex items-center gap-2">
-									<SunIcon class="h-4 w-4 text-amber-500" />
-									Tagesbeginn
-								</Label>
-								<div class="relative">
-									<Input id="day_start" type="number" min="0" max="23" bind:value={config.day_start} class="pr-12" />
-									<span class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">Uhr</span>
-								</div>
-							</div>
-							<div class="grid gap-2">
-								<Label for="day_end" class="flex items-center gap-2">
-									<MoonIcon class="h-4 w-4 text-indigo-500" />
-									Tagesende
-								</Label>
-								<div class="relative">
-									<Input id="day_end" type="number" min="0" max="24" bind:value={config.day_end} class="pr-12" />
-									<span class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">Uhr</span>
-								</div>
-							</div>
-						</div>
-
-						<!-- Visual time bar -->
-						<div class="space-y-2">
-							<p class="text-sm text-muted-foreground">Tarifübersicht</p>
-							<div class="relative h-10 rounded-lg overflow-hidden bg-indigo-100">
-								<!-- Day period -->
-								<div
-									class="absolute top-0 bottom-0 bg-gradient-to-r from-amber-300 to-amber-400"
-									style="left: {dayStartPercent}%; width: {dayEndPercent - dayStartPercent}%"
-								></div>
-								<!-- Current time indicator -->
-								<div
-									class="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
-									style="left: {currentHourPercent}%"
-								>
-									<div class="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-red-500"></div>
-								</div>
-							</div>
-							<div class="flex justify-between text-xs text-muted-foreground">
-								<span>0:00</span>
-								<span>6:00</span>
-								<span>12:00</span>
-								<span>18:00</span>
-								<span>24:00</span>
-							</div>
-							<div class="flex items-center gap-4 text-xs pt-2">
-								<div class="flex items-center gap-1.5">
-									<div class="w-3 h-3 rounded bg-gradient-to-r from-amber-300 to-amber-400"></div>
-									<span>Tagestarif</span>
-								</div>
-								<div class="flex items-center gap-1.5">
-									<div class="w-3 h-3 rounded bg-indigo-100"></div>
-									<span>Nachttarif</span>
-								</div>
-								<div class="flex items-center gap-1.5">
-									<div class="w-3 h-3 rounded bg-red-500"></div>
-									<span>Jetzt</span>
-								</div>
-							</div>
-						</div>
-					</div>
-				</Card.Content>
-				<Card.Footer>
-					<Button onclick={save} disabled={saving} class="w-full">
-						{#if saving}
-							<LoaderIcon class="h-4 w-4 mr-2 animate-spin" />
-							Speichern...
-						{:else}
-							<CheckIcon class="h-4 w-4 mr-2" />
-							Zeiten speichern
-						{/if}
-					</Button>
-				</Card.Footer>
-			</Card.Root>
 		</div>
 	{/if}
 </div>

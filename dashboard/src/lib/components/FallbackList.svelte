@@ -4,6 +4,8 @@
 	import { Input } from "$lib/components/ui/input/index.js";
 	import { Label } from "$lib/components/ui/label/index.js";
 	import * as Card from "$lib/components/ui/card/index.js";
+	import ChevronUpIcon from "@lucide/svelte/icons/chevron-up";
+	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
 	interface Props {
 		fallbacks: FallbackContact[];
@@ -39,6 +41,14 @@
 			fallbacks.map((f) => (f.id === id ? { ...f, [field]: value } : f))
 		);
 	}
+
+	function moveFallback(index: number, direction: "up" | "down") {
+		const newIndex = direction === "up" ? index - 1 : index + 1;
+		if (newIndex < 0 || newIndex >= fallbacks.length) return;
+		const updated = [...fallbacks];
+		[updated[index], updated[newIndex]] = [updated[newIndex], updated[index]];
+		onchange(updated);
+	}
 </script>
 
 <Card.Root>
@@ -50,8 +60,28 @@
 	</Card.Header>
 	<Card.Content>
 		<div class="space-y-4">
-			{#each fallbacks as fb (fb.id)}
+			{#each fallbacks as fb, index (fb.id)}
 				<div class="flex gap-2 items-end">
+					<div class="flex flex-col gap-1">
+						<Button
+							variant="ghost"
+							size="icon"
+							class="h-6 w-6"
+							disabled={index === 0}
+							onclick={() => moveFallback(index, "up")}
+						>
+							<ChevronUpIcon class="h-4 w-4" />
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon"
+							class="h-6 w-6"
+							disabled={index === fallbacks.length - 1}
+							onclick={() => moveFallback(index, "down")}
+						>
+							<ChevronDownIcon class="h-4 w-4" />
+						</Button>
+					</div>
 					<div class="flex-1 grid gap-2">
 						<Label>Name</Label>
 						<Input

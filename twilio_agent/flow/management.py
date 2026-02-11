@@ -87,6 +87,8 @@ async def add_default_contacts(request: Request):
     emergency = sm.get_emergency_contact()
     contact_id = emergency.get("contact_id")
 
+    logging.info("Adding default contacts to queue, emergency contact ID: %s", contact_id)
+
     if contact_id:
         cm = ContactManager()
         # Find the contact by ID across all categories to get the phone number

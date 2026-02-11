@@ -42,7 +42,7 @@
 				}
 			}
 
-			await createContact(category, {
+			const created = await createContact(category, {
 				name,
 				phone,
 				address,
@@ -53,7 +53,7 @@
 				fallbacks_json: JSON.stringify(fallbacks),
 			});
 
-			goto(`/kontakte/${encodeURIComponent(name)}`);
+			goto(`/kontakte/${created.id}`);
 		} catch (e: any) {
 			error = e.message;
 		} finally {

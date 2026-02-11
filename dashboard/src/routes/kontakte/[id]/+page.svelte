@@ -39,14 +39,14 @@
 	// Original values to detect changes
 	let originalAddress = $state("");
 
-	const contactName = $derived(decodeURIComponent($page.params.name || ""));
+	const contactId = $derived($page.params.id || "");
 
 	async function loadContact() {
 		try {
 			const all = await getContacts();
-			// Find contact by name across categories
+			// Find contact by ID across categories
 			for (const cat of ["locksmith", "towing"] as Category[]) {
-				const found = all[cat]?.find((c) => c.name === contactName);
+				const found = all[cat]?.find((c) => c.id === contactId);
 				if (found) {
 					contact = {
 						...found,
@@ -124,11 +124,6 @@
 				fallbacks,
 			};
 
-			// Update URL if name changed
-			if (name !== contactName) {
-				goto(`/kontakte/${encodeURIComponent(name)}`, { replaceState: true });
-			}
-
 			setTimeout(() => {
 				success = "";
 			}, 3000);
@@ -153,7 +148,7 @@
 <div class="flex items-center gap-4 mb-6">
 	<Button variant="outline" href="/kontakte">Zurück</Button>
 	<div>
-		<h2 class="text-3xl font-bold tracking-tight">{contactName}</h2>
+		<h2 class="text-3xl font-bold tracking-tight">{name || "Kontakt"}</h2>
 		<p class="text-muted-foreground">Kontaktdetails bearbeiten</p>
 	</div>
 </div>
@@ -240,7 +235,7 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title>Kontakt löschen</AlertDialog.Title>
 			<AlertDialog.Description>
-				Möchtest du <strong>{contactName}</strong> wirklich loeschen? Diese Aktion
+				Möchtest du <strong>{name}</strong> wirklich loeschen? Diese Aktion
 				kann nicht rückgängig gemacht werden.
 			</AlertDialog.Description>
 		</AlertDialog.Header>

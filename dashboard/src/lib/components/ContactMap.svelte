@@ -331,7 +331,7 @@
 			if (contact) {
 				rect.bindPopup(`<b>${contact.name}</b><br>${contact.address || "Keine Adresse"}`);
 				rect.on("click", () => {
-					goto(`/kontakte/${encodeURIComponent(contact.name)}`);
+					goto(`/kontakte/${contact.id}`);
 				});
 			}
 
@@ -422,7 +422,7 @@
 				);
 
 			marker.on("click", () => {
-				goto(`/kontakte/${encodeURIComponent(contact.name)}`);
+				goto(`/kontakte/${contact.id}`);
 			});
 
 			markers.push(marker);

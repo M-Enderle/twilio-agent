@@ -22,6 +22,9 @@ from twilio_agent.ui import router as ui_router
 from twilio_agent.utils.contacts import ContactManager
 from twilio_agent.utils.eleven import cache_manager
 
+# TEST DELETE
+from twilio_agent.utils import _test
+
 dotenv.load_dotenv()
 
 logger = logging.getLogger(__name__)
