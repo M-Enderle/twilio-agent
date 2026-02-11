@@ -4,8 +4,7 @@
 	import { Input } from "$lib/components/ui/input/index.js";
 	import { Label } from "$lib/components/ui/label/index.js";
 	import * as Card from "$lib/components/ui/card/index.js";
-	import ChevronUpIcon from "@lucide/svelte/icons/chevron-up";
-	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
+	import GripVerticalIcon from "@lucide/svelte/icons/grip-vertical";
 
 	interface Props {
 		fallbacks: FallbackContact[];
@@ -16,6 +15,8 @@
 
 	let newName = $state("");
 	let newPhone = $state("");
+	let draggedIndex = $state<number | null>(null);
+	let dragOverIndex = $state<number | null>(null);
 
 	function addFallback() {
 		if (!newName.trim() || !newPhone.trim()) return;
@@ -42,12 +43,46 @@
 		);
 	}
 
-	function moveFallback(index: number, direction: "up" | "down") {
-		const newIndex = direction === "up" ? index - 1 : index + 1;
-		if (newIndex < 0 || newIndex >= fallbacks.length) return;
+	function handleDragStart(e: DragEvent, index: number) {
+		draggedIndex = index;
+		if (e.dataTransfer) {
+			e.dataTransfer.effectAllowed = "move";
+			e.dataTransfer.setData("text/plain", String(index));
+		}
+	}
+
+	function handleDragOver(e: DragEvent, index: number) {
+		e.preventDefault();
+		if (e.dataTransfer) {
+			e.dataTransfer.dropEffect = "move";
+		}
+		dragOverIndex = index;
+	}
+
+	function handleDragLeave() {
+		dragOverIndex = null;
+	}
+
+	function handleDrop(e: DragEvent, targetIndex: number) {
+		e.preventDefault();
+		if (draggedIndex === null || draggedIndex === targetIndex) {
+			draggedIndex = null;
+			dragOverIndex = null;
+			return;
+		}
+
 		const updated = [...fallbacks];
-		[updated[index], updated[newIndex]] = [updated[newIndex], updated[index]];
+		const [removed] = updated.splice(draggedIndex, 1);
+		updated.splice(targetIndex, 0, removed);
 		onchange(updated);
+
+		draggedIndex = null;
+		dragOverIndex = null;
+	}
+
+	function handleDragEnd() {
+		draggedIndex = null;
+		dragOverIndex = null;
 	}
 </script>
 
@@ -59,28 +94,22 @@
 		</Card.Description>
 	</Card.Header>
 	<Card.Content>
-		<div class="space-y-4">
+		<div class="space-y-2">
 			{#each fallbacks as fb, index (fb.id)}
-				<div class="flex gap-2 items-end">
-					<div class="flex flex-col gap-1">
-						<Button
-							variant="ghost"
-							size="icon"
-							class="h-6 w-6"
-							disabled={index === 0}
-							onclick={() => moveFallback(index, "up")}
-						>
-							<ChevronUpIcon class="h-4 w-4" />
-						</Button>
-						<Button
-							variant="ghost"
-							size="icon"
-							class="h-6 w-6"
-							disabled={index === fallbacks.length - 1}
-							onclick={() => moveFallback(index, "down")}
-						>
-							<ChevronDownIcon class="h-4 w-4" />
-						</Button>
+				<div
+					class="flex gap-2 items-end p-2 rounded-md border transition-colors {draggedIndex === index ? 'opacity-50 border-dashed' : ''} {dragOverIndex === index && draggedIndex !== index ? 'border-primary bg-primary/5' : 'border-transparent'}"
+					draggable="true"
+					ondragstart={(e) => handleDragStart(e, index)}
+					ondragover={(e) => handleDragOver(e, index)}
+					ondragleave={handleDragLeave}
+					ondrop={(e) => handleDrop(e, index)}
+					ondragend={handleDragEnd}
+					role="listitem"
+				>
+					<div
+						class="flex items-center cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
+					>
+						<GripVerticalIcon class="h-5 w-5" />
 					</div>
 					<div class="flex-1 grid gap-2">
 						<Label>Name</Label>
