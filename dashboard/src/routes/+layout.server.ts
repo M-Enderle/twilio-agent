@@ -1,9 +1,12 @@
 import { redirect } from "@sveltejs/kit";
+import { env } from "$env/dynamic/private";
 import type { LayoutServerLoad } from "./$types";
 
 export const load: LayoutServerLoad = async ({ cookies, url }) => {
+	const apiUrl = env.API_URL || null;
+
 	if (url.pathname.startsWith("/auth")) {
-		return { user: null, accessToken: null };
+		return { user: null, accessToken: null, apiUrl };
 	}
 
 	const sessionCookie = cookies.get("session");
@@ -18,5 +21,5 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
 		throw redirect(302, "/auth/login");
 	}
 
-	return { user: session.user, accessToken: session.accessToken };
+	return { user: session.user, accessToken: session.accessToken, apiUrl };
 };

@@ -11,8 +11,6 @@ function getApiBase(): string {
 	return `${window.location.protocol}//${window.location.hostname}:8000/api/dashboard`;
 }
 
-const API_BASE = getApiBase();
-
 let _token: string | null = null;
 
 export function setToken(token: string | null) {
@@ -28,7 +26,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 	if (_token) {
 		headers["Authorization"] = `Bearer ${_token}`;
 	}
-	const res = await fetch(`${API_BASE}${path}`, {
+	const res = await fetch(`${getApiBase()}${path}`, {
 		headers,
 		...options,
 	});
