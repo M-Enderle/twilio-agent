@@ -20,6 +20,9 @@
 	const isAuthPage = $derived(page.url.pathname.startsWith("/auth"));
 
 	onMount(() => {
+		if (data.apiUrl) {
+			(window as any).__API_URL__ = data.apiUrl;
+		}
 		if (data.accessToken) {
 			setToken(data.accessToken);
 		}
