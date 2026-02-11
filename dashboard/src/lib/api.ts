@@ -1,8 +1,17 @@
 import type { Contact, ActiveHoursConfig, VacationMode, SystemStatus, Category } from "./types";
 
-const API_BASE = (typeof window !== "undefined" && (window as any).__API_URL__)
-	? (window as any).__API_URL__
-	: "http://localhost:8000/api/dashboard";
+function getApiBase(): string {
+	if (typeof window === "undefined") {
+		return "http://localhost:8000/api/dashboard";
+	}
+	if ((window as any).__API_URL__) {
+		return (window as any).__API_URL__;
+	}
+	// Use the same hostname as the current page, but port 8000
+	return `${window.location.protocol}//${window.location.hostname}:8000/api/dashboard`;
+}
+
+const API_BASE = getApiBase();
 
 let _token: string | null = null;
 
