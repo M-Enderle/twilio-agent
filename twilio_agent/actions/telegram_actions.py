@@ -73,15 +73,7 @@ async def send_message(tracking_url: str, phone: str, chat_id: str = None, bot_t
     berlin_tz = pytz.timezone("Europe/Berlin")
     current_time = datetime.now(berlin_tz).strftime("%H:%M:%S")
 
-    # Include service name in message
-    service_emoji = {
-        "schluessel-allgaeu": "🔑",
-        "notdienst-schluessel": "🔑",
-        "notdienst-abschlepp": "🚗"
-    }
-    service_prefix = f"{service_emoji.get(service_id, '📞')} " if service_id else ""
-
-    message = f"{service_prefix}Neuer eingehender Anruf!\n\n👤 Anrufer: {phone}\n🕐 Uhrzeit: {current_time}"
+    message = f"Neuer eingehender Anruf!\n\n👤 Anrufer: {phone}\n🕐 Uhrzeit: {current_time}"
 
     # Create inline keyboard with button
     keyboard = [[InlineKeyboardButton("🌐 Jetzt Live verfolgen", url=tracking_url)]]
