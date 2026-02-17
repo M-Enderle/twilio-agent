@@ -45,7 +45,7 @@ async def add_locksmith_contacts(request: Request):
 
     cm = ContactManager()
     sm = SettingsManager()
-    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact()
+    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact().get("contact_name")
     contacts = cm.get_contacts_for_category("locksmith")
 
     # If a specific provider was determined (e.g. by pricing), add them first
@@ -73,7 +73,7 @@ async def add_towing_contacts(request: Request):
 
     cm = ContactManager()
     sm = SettingsManager()
-    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact()
+    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact().get("contact_name")
     contacts = cm.get_contacts_for_category("towing")
 
     # If a specific provider was determined (e.g. by pricing), add them first
