@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 
-import dotenv
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -12,8 +11,6 @@ from twilio.rest import Client
 from twilio_agent.actions.redis_actions import (get_call_recording_binary,
                                                 get_call_timestamp,
                                                 save_call_recording)
-
-dotenv.load_dotenv()
 
 account_sid = os.getenv("TWILIO_ACCOUNT_SID")
 auth_token = os.getenv("TWILIO_AUTH_TOKEN")

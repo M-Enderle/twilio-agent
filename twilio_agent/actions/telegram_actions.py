@@ -3,15 +3,12 @@ import logging
 import os
 from datetime import datetime
 
-import dotenv
 import pytz
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from twilio_agent.actions.redis_actions import get_call_timestamp
 
 logger = logging.getLogger("uvicorn")
-
-dotenv.load_dotenv()
 
 
 async def send_telegram_notification(caller_number: str) -> str:

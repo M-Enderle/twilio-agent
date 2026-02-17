@@ -98,7 +98,7 @@ Configure these URLs in your Twilio Console:
 ```
 twilio-agent/
 ├── twilio_agent/              # Main application package
-│   ├── conversation_flow.py   # FastAPI app and call routing
+│   ├── main.py   # FastAPI app and call routing
 │   ├── actions/              # Twilio and Redis integrations
 │   └── utils/                # AI, location, pricing utilities
 ├── data/                     # ZIP code databases
@@ -139,16 +139,57 @@ twilio-agent/
 
 3. **Run the application:**
    ```bash
-   uvicorn twilio_agent.conversation_flow:app --reload
+   uvicorn twilio_agent.main:app --reload
    ```
 
 ### Testing
 
-```bash
-# Run tests
-poetry run pytest
+Tests live in the `tests/` directory and mirror the source tree structure:
 
-# Check code formatting
+```
+tests/
+├── twilio_agent/
+│   ├── utils/
+│   │   ├── test_contacts.py
+│   │   ├── test_ai.py
+│   │   └── ...
+│   ├── test_main.py
+│   └── ...
+└── ...
+```
+
+**Install test dependencies (one-time):**
+```bash
+poetry add --group dev pytest pytest-asyncio
+```
+
+**Run all tests:**
+```bash
+poetry run pytest
+```
+
+**Run tests with verbose output:**
+```bash
+poetry run pytest -v
+```
+
+**Run a specific test file:**
+```bash
+poetry run pytest tests/twilio_agent/utils/test_contacts.py
+```
+
+**Run a specific test function:**
+```bash
+poetry run pytest tests/twilio_agent/utils/test_contacts.py::test_function_name
+```
+
+**Run tests matching a keyword:**
+```bash
+poetry run pytest -k "keyword"
+```
+
+**Check code formatting:**
+```bash
 poetry run black twilio_agent/
 poetry run isort twilio_agent/
 ```

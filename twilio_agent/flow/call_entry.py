@@ -29,7 +29,7 @@ from twilio_agent.flow.shared import (get_caller_number, narrate,
                                       send_twilio_response,
                                       transfer_with_message)
 from twilio_agent.utils.ai import classify_intent
-from twilio_agent.utils.settings import SettingsManager
+from twilio_agent.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +43,16 @@ async def incoming_call(request: Request):
     form_data = await request.form()
 
     # Check direct forwarding settings
-    settings_manager = SettingsManager()
-    direct_forwarding = settings_manager.get_direct_forwarding()
-    vacation = settings_manager.get_vacation_mode()
+    direct_forwarding = settings.direct_forwarding
+    # Note: vacation mode removed - ignoring vacation check
 
-    if direct_forwarding.get("active") and direct_forwarding.get("forward_phone") and not vacation.get("active"):
+    if direct_forwarding.active and direct_forwarding.forward_phone:
         berlin_tz = pytz.timezone('Europe/Berlin')
         current_time = datetime.now(berlin_tz)
         current_hour = current_time.hour + current_time.minute / 60
 
-        start_hour = direct_forwarding.get("start_hour", 0)
-        end_hour = direct_forwarding.get("end_hour", 6)
+        start_hour = direct_forwarding.start_hour
+        end_hour = direct_forwarding.end_hour
 
         # Check if current time is within forwarding window
         if start_hour <= current_hour < end_hour:
@@ -61,7 +60,7 @@ async def incoming_call(request: Request):
 
             with new_response() as response:
                 dial = Dial(callerId="+491604996655")
-                dial.append(Number(direct_forwarding["forward_phone"]))
+                dial.append(Number(direct_forwarding.forward_phone))
                 response.append(dial)
                 return send_request(request, response)
 

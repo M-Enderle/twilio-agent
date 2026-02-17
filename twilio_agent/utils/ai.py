@@ -1,77 +1,87 @@
+"""Parallel LLM request utilities with caching.
+
+Races Grok (xAI) against GPT-OSS-120B (Baseten), preferring Grok when it
+responds within 1 second. Results are cached via ``CacheManager``.
+"""
+
 import asyncio
 import logging
 import os
 import time
+from typing import Callable
 
-import dotenv
 from openai import OpenAI
 from xai_sdk import Client
 from xai_sdk.chat import system, user
+from xai_sdk.tools import web_search
 
 from twilio_agent.utils.cache import CacheManager
 
-# logger = logging.getLogger("uvicorn")
-logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logger = logging.getLogger("uvicorn")
 
-dotenv.load_dotenv()
-
-# --- Initialize XAI Client (Grok) ---
-client = Client(api_key=os.environ["XAI_API_KEY"])
-
-# --- Initialize Baseten Client (GPT-OSS-120B) ---
+client = Client(api_key=os.environ.get("XAI_API_KEY", ""))
 baseten_client = OpenAI(
     api_key=os.environ.get("BASETEN_API_KEY", ""),
     base_url="https://inference.baseten.co/v1",
 )
-
 cache_manager = CacheManager("LLM")
 
 
-async def _ask_grok(system_prompt: str, user_prompt: str) -> str:
-    """Shared function for Grok API calls.
+def _parse_arrow_response(response: str, maxsplit: int = 1) -> list[str]:
+    """Split an LLM response on ``->`` and strip each part.
 
-    The underlying SDK is synchronous, so run it in a thread via
-    asyncio.to_thread to make this an awaitable coroutine.
+    Args:
+        response: Raw text returned by the LLM.
+        maxsplit: Maximum number of splits (forwarded to ``str.split``).
+
+    Returns:
+        List of stripped string segments.
     """
-    if client is None:
-        logger.error("Client not initialized. Returning empty response.")
-        return ""
+    if "->" not in response:
+        return [response.strip()]
+    return [p.strip() for p in response.split("->", maxsplit)]
+
+
+async def _cancel_task(task: asyncio.Task) -> None:
+    """Cancel an asyncio task and suppress CancelledError."""
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def _ask_grok(system_prompt: str, user_prompt: str, use_web_search: bool = False) -> str:
+    """Grok API call, run in a thread to be awaitable."""
 
     def _sync_call():
         try:
-            chat = client.chat.create(model="grok-4-fast-non-reasoning", temperature=0)
+            tools = [web_search()] if use_web_search else None
+            chat = client.chat.create(model="grok-4-fast-non-reasoning", temperature=0, tools=tools)
             chat.append(system(system_prompt))
             chat.append(user(user_prompt))
-            response_grok = chat.sample()
-            return response_grok.content.strip()
+            return chat.sample().content.strip()
         except Exception as e:
-            logger.error(f"Grok API call failed: {e}")
+            logger.error("Grok API call failed: %s", e)
             return ""
 
     return await asyncio.to_thread(_sync_call)
 
 
 async def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
-    """Make a request to GPT-OSS-120B via Baseten.
-
-    The Baseten client is synchronous; run it in a thread to be awaitable.
-    """
-    if not baseten_client or not os.environ.get("BASETEN_API_KEY"):
+    """GPT-OSS-120B via Baseten, run in a thread to be awaitable."""
+    if not os.environ.get("BASETEN_API_KEY"):
         logger.debug("Baseten client not configured.")
         return ""
 
     def _sync_call():
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
             response = baseten_client.chat.completions.create(
                 model="openai/gpt-oss-120b",
-                messages=messages,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
                 temperature=0,
                 max_tokens=1000,
                 top_p=1,
@@ -82,68 +92,88 @@ async def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
                 return response.choices[0].message.content.strip()
             return ""
         except Exception as e:
-            logger.debug(f"Baseten API call failed: {e}")
+            logger.debug("Baseten API call failed: %s", e)
             return ""
 
     return await asyncio.to_thread(_sync_call)
 
 
 async def _ask_llm_parallel(system_prompt: str, user_prompt: str) -> tuple[str, str]:
-    """
-    Request both Grok and Baseten LLMs in parallel.
-    Returns (response, model_source) where model_source is "grok" or "gpt".
-    Uses Grok if it completes within 1 second.
-    Otherwise, uses whichever completes first.
-    Falls back to the other if one fails.
-    """
-
+    """Race Grok and Baseten. Prefers Grok if it finishes within 1s."""
     grok_task = asyncio.create_task(_ask_grok(system_prompt, user_prompt))
     baseten_task = asyncio.create_task(_ask_baseten(system_prompt, user_prompt))
 
     try:
-        # Wait up to 1s for grok_task only
-        done, pending = await asyncio.wait([grok_task], timeout=1)
+        done, _ = await asyncio.wait([grok_task], timeout=1, return_when=asyncio.FIRST_COMPLETED)
         if done:
             grok_result = await grok_task
-            # cancel Baseten, since Grok succeeded in time
-            baseten_task.cancel()
-            try:
-                await baseten_task
-            except asyncio.CancelledError:
-                pass
-            return (grok_result, "grok") if grok_result else ("", "unknown")
-        else:
-            # Grok didn't finish in 1s, now race both
-            done_both, pending_both = await asyncio.wait(
-                [grok_task, baseten_task], return_when=asyncio.FIRST_COMPLETED
-            )
-            finished_task = done_both.pop()
-            resp = await finished_task
-            model_source = "grok" if finished_task == grok_task else "gpt"
-            # Cancel the other still running task
-            for task in pending_both:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            return (resp, model_source) if resp else ("", "unknown")
+            if grok_result:
+                await _cancel_task(baseten_task)
+                return grok_result, "grok"
+            # Grok returned empty — fall through to race both
+
+        done_both, pending_both = await asyncio.wait(
+            [grok_task, baseten_task], return_when=asyncio.FIRST_COMPLETED
+        )
+        finished_task = done_both.pop()
+        resp = await finished_task
+        model_source = "grok" if finished_task == grok_task else "gpt"
+        for task in pending_both:
+            await _cancel_task(task)
+        return (resp, model_source) if resp else ("", "unknown")
     except Exception:
+        logger.exception("Unexpected error in _ask_llm_parallel")
         return "", "unknown"
     finally:
         for task in [grok_task, baseten_task]:
             if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+                await _cancel_task(task)
+
+
+async def _cached_llm_request(
+    cache_key: str,
+    cache_input: dict,
+    system_prompt: str,
+    user_prompt: str,
+    parse_fn: Callable[[str], dict],
+    build_return: Callable[[dict, float, str], tuple],
+    error_return: Callable[[Exception], tuple],
+) -> tuple:
+    """Cache check -> timed LLM call -> parse -> cache set -> return.
+
+    Each public function supplies:
+      parse_fn:     raw LLM text  -> dict of result fields
+      build_return: (result_dict, duration, model_source) -> final return tuple
+      error_return: exception -> final return tuple on failure
+    """
+    cached = cache_manager.get(cache_key, cache_input)
+    if cached:
+        logger.info("Returning cached result for %s", cache_key)
+        return build_return(cached, 0.0, "cache")
+
+    try:
+        start = time.monotonic()
+        response, model_source = await _ask_llm_parallel(system_prompt, user_prompt)
+        parsed = parse_fn(response.strip())
+        duration = time.monotonic() - start
+        cache_manager.set(cache_key, cache_input, {**parsed, "duration": duration})
+        logger.info("%s complete. Model: %s", cache_key, model_source)
+        return build_return(parsed, duration, model_source)
+    except Exception as e:
+        logger.error("Error in %s: %s", cache_key, e)
+        return error_return(e)
 
 
 async def classify_intent(spoken_text: str) -> tuple[str, str, float | None, str]:
-    """
-    Classifies the user's intent into a predefined set of categories.
-    Returns (classification, reasoning, duration, model_source) where duration is None when timing data is unavailable.
+    """Classify spoken text into a service category.
+
+    Args:
+        spoken_text: Transcribed speech from the caller.
+
+    Returns:
+        A 4-tuple of ``(classification, reasoning, duration, model_source)``
+        where *classification* is one of ``schlüsseldienst``,
+        ``abschleppdienst``, ``adac``, ``mitarbeiter``, or ``andere``.
     """
     choices = ["schlüsseldienst", "abschleppdienst", "adac", "mitarbeiter", "andere"]
     fallback = "andere"
@@ -151,26 +181,13 @@ async def classify_intent(spoken_text: str) -> tuple[str, str, float | None, str
     if not spoken_text:
         return fallback, "Kein Text vorhanden.", None, "cache"
 
-    # Check cache first
-    cache_input = {"spoken_text": spoken_text}
-    cached_result = cache_manager.get("classify_intent", cache_input)
-    if cached_result:
-        logger.info(f"Returning cached result for classify_intent")
-        return (
-            cached_result.get("classification"),
-            cached_result.get("reasoning"),
-            0.0,
-            "cache",
-        )
-
-    try:
-        choices_str = "', '".join(choices)
-        system_prompt = f"""
+    choices_str = "', '".join(choices)
+    system_prompt = f"""
     Du klassifizierst exakt in eine dieser Klassen: '{choices_str}'. Gib die Klassifizierung und eine kurze Begründung auf Deutsch aus.
 
     FORMAT: <Begründung> -> <Klasse>
 
-    Wähle EINE der folgenden Klassen: {choices_str} 
+    Wähle EINE der folgenden Klassen: {choices_str}
     Gebe die klasse und begründung ohne < und > aus. Nutze immmer ->.
 
     Begründung kurz auf Deutsch. Nenne wenn möglich die Regel. max 10 wörter.
@@ -207,64 +224,46 @@ async def classify_intent(spoken_text: str) -> tuple[str, str, float | None, str
     - "Mein Auto springt nicht an" => "Auto startet nicht. -> abschleppdienst"
 
     """
-        user_prompt = f'Kategorisiere diese Anfrage: "{spoken_text}"'
 
-        start = time.monotonic()
-        response, model_source = await _ask_llm_parallel(system_prompt, user_prompt)
-        response = response.strip()
-        if "->" in response:
-            reasoning, classification = response.split("->", 1)
-            classification = classification.strip().lower()
-            reasoning = reasoning.strip()
+    def parse(response: str) -> dict:
+        parts = _parse_arrow_response(response)
+        if len(parts) == 2:
+            reasoning, classification = parts[0], parts[1].lower()
         else:
             classification = response.lower()
             reasoning = "Keine Begründung gegeben."
-
         result = classification if classification in choices else fallback
         if result != classification:
             reasoning = f"Unerwartete Klassifizierung '{classification}', fallback zu '{result}'. Ursprüngliche Begründung: {reasoning}"
+        return {"classification": result, "reasoning": reasoning}
 
-        logger.info(f"Classification result: {result}. Model: {model_source}")
-
-        duration = time.monotonic() - start
-        # Cache the result (include duration)
-        cache_manager.set(
-            "classify_intent",
-            cache_input,
-            {"classification": result, "reasoning": reasoning, "duration": duration},
-        )
-
-        return result, reasoning, duration, model_source
-
-    except Exception as e:
-        logger.error(f"Error in classify_intent: {e}")
-        return fallback, f"Fehler: {e}", None, "unknown"
+    return await _cached_llm_request(
+        cache_key="classify_intent",
+        cache_input={"spoken_text": spoken_text},
+        system_prompt=system_prompt,
+        user_prompt=f'Kategorisiere diese Anfrage: "{spoken_text}"',
+        parse_fn=parse,
+        build_return=lambda d, dur, src: (d["classification"], d["reasoning"], dur, src),
+        error_return=lambda e: (fallback, f"Fehler: {e}", None, "unknown"),
+    )
 
 
 async def yes_no_question(
     spoken_text: str, context: str
 ) -> tuple[bool, str, float | None, str]:
-    """
-    Determines if spoken text represents clear agreement (Yes) or not (No).
-    Returns (is_agreement, reasoning, duration, model_source) where duration is None when timing data is unavailable.
+    """Determine whether spoken text expresses agreement or disagreement.
+
+    Args:
+        spoken_text: Transcribed speech from the caller.
+        context: Conversational context the question was asked in.
+
+    Returns:
+        A 4-tuple of ``(is_agreement, reasoning, duration, model_source)``.
     """
     if not spoken_text:
         return False, "Kein Text vorhanden.", None, "cache"
 
-    # Check cache first
-    cache_input = {"spoken_text": spoken_text, "context": context}
-    cached_result = cache_manager.get("yes_no_question", cache_input)
-    if cached_result:
-        logger.info(f"Returning cached result for yes_no_question")
-        return (
-            cached_result.get("is_agreement"),
-            cached_result.get("reasoning"),
-            0.0,
-            "cache",
-        )
-
-    try:
-        system_prompt = """
+    system_prompt = """
     Entscheide, ob die Antwort Zustimmung zeigt. Gib eine kurze Begründung (max 10 Wörter) und "Ja" oder "Nein" auf Deutsch aus.
 
     Format: <Begründung> -> <Ja/Nein>
@@ -285,68 +284,43 @@ async def yes_no_question(
     - "ja gerne" => "Klar ja. -> Ja"
     - "nein danke" => "Klar nein. -> Nein"
     """
-        user_prompt = f'Kontext: "{context}" \nAntwort des Benutzers: "{spoken_text}". Zeigt dies eine bejahende Absicht?'
 
-        start = time.monotonic()
-        response, model_source = await _ask_llm_parallel(system_prompt, user_prompt)
-        response = response.strip()
-        if "->" in response:
-            reasoning, decision = response.split("->", 1)
-            decision = decision.strip()
-            reasoning = reasoning.strip()
+    def parse(response: str) -> dict:
+        parts = _parse_arrow_response(response)
+        if len(parts) == 2:
+            reasoning, decision = parts
         else:
             decision = response
             reasoning = "Keine Begründung gegeben."
+        return {"is_agreement": decision.strip().lower() == "ja", "reasoning": reasoning}
 
-        is_agreement = decision == "Ja"
-        logger.info(f"Yes/No question result: {is_agreement}. Model: {model_source}")
-
-        duration = time.monotonic() - start
-        # Cache the result including duration
-        cache_manager.set(
-            "yes_no_question",
-            cache_input,
-            {
-                "is_agreement": is_agreement,
-                "reasoning": reasoning,
-                "duration": duration,
-            },
-        )
-
-        return is_agreement, reasoning, duration, model_source
-
-    except Exception as e:
-        logger.error(f"Error in yes_no_question: {e}")
-        return False, f"Fehler: {e}", None, "unknown"
+    return await _cached_llm_request(
+        cache_key="yes_no_question",
+        cache_input={"spoken_text": spoken_text, "context": context},
+        system_prompt=system_prompt,
+        user_prompt=f'Kontext: "{context}" \nAntwort des Benutzers: "{spoken_text}". Zeigt dies eine bejahende Absicht?',
+        parse_fn=parse,
+        build_return=lambda d, dur, src: (d["is_agreement"], d["reasoning"], dur, src),
+        error_return=lambda e: (False, f"Fehler: {e}", None, "unknown"),
+    )
 
 
 async def process_location(
     spoken_text: str,
-) -> tuple[bool, bool, str | None, float | None, str]:
-    """
-    Determines if spoken text contains location information and extracts it if present.
-    Returns (contains_location, extracted_address, reasoning, duration, model_source).
-    Note: Do not return any reasoning from the model; reasoning is always an empty string.
+) -> tuple[bool | None, bool | None, bool | None, str | None, float, str]:
+    """Extract location information from spoken text.
+
+    Args:
+        spoken_text: Transcribed speech from the caller.
+
+    Returns:
+        A 6-tuple of ``(contains_loc, contains_city, knows_location,
+        address, duration, model_source)``.
     """
     if not spoken_text:
         return None, None, None, None, 0.0, "cache"
 
-    # Check cache first
-    cache_input = {"spoken_text": spoken_text}
-    cached_result = cache_manager.get("process_location", cache_input)
-    if cached_result:
-        logger.info(f"Returning cached result for process_location")
-        return (
-            cached_result.get("contains_loc"),
-            cached_result.get("contains_city"),
-            cache_input.get("knows_location"),
-            cached_result.get("address"),
-            0.0,
-            "cache",
-        )
-
-    try:
-        system_prompt = """
+    system_prompt = """
     Entscheide ob der gegebene Text Standortinformationen enthält. Falls ja, entscheide ob ein Ort oder PLZ extrahiert werden kann, und extrahiere die Adresse so vollständig wie möglich.
     Gib KEINE Begründung aus. Falls nein Entscheide ob der User es nicht weiß oder ob er über etwas anderes spricht.
 
@@ -379,77 +353,86 @@ async def process_location(
     Hauptstraße 5 in Immenstadt: Ja -> Ja -> -> Ja -> Hauptstraße 5 in Immenstadt
     4040 Linz: Ja -> Ja -> -> Ja -> 4040 Linz
     Ich wohne in der Friedrichstraße 5: Ja -> Nein -> Ja -> Friedrichstraße 5
-    Ich weiß nicht wo ich bin.: Nein -> Nein -> Nein -> 
+    Ich weiß nicht wo ich bin.: Nein -> Nein -> Nein ->
 
     Orte die oft vorkommen:
     Immenstadt, Kempten, Memmingen, Allgäu region
     """
-        user_prompt = f'Text: "{spoken_text}"'
 
-        start = time.monotonic()
-        response, model_source = await _ask_llm_parallel(system_prompt, user_prompt)
-        response = response.strip()
-
-        parts = [p.strip() for p in response.split("->", 3)]
+    def parse(response: str) -> dict:
+        parts = _parse_arrow_response(response, maxsplit=3)
         if len(parts) == 4:
-            decision = parts[0]
-            contains_city = parts[1]
-            knows_location = parts[2]
-            address_str = parts[3]
+            decision, city, knows, address_str = parts
         else:
-            decision = "Nein"
-            contains_city = "Nein"
-            knows_location = "Nein"
-            address_str = ""
-
+            decision, city, knows, address_str = "Nein", "Nein", "Nein", ""
         contains_loc = decision.lower() == "ja"
-        contains_city_bool = contains_city.lower() == "ja"
-        knows_location_bool = knows_location.lower() == "ja"
-        extracted_address = address_str if contains_loc and address_str else None
+        return {
+            "contains_loc": contains_loc,
+            "contains_city": city.lower() == "ja",
+            "knows_location": knows.lower() == "ja",
+            "address": address_str if contains_loc and address_str else None,
+        }
 
-        logger.info(
-            f"Location processing result: contains={contains_loc}, contains_city={contains_city_bool}, address={extracted_address}. Model: {model_source}"
+    return await _cached_llm_request(
+        cache_key="process_location",
+        cache_input={"spoken_text": spoken_text},
+        system_prompt=system_prompt,
+        user_prompt=f'Text: "{spoken_text}"',
+        parse_fn=parse,
+        build_return=lambda d, dur, src: (d["contains_loc"], d["contains_city"], d["knows_location"], d["address"], dur, src),
+        error_return=lambda _: (False, False, None, None, 0.0, "unknown"),
+    )
+
+
+async def correct_plz(location: str, lat: float, lon: float) -> str | None:
+    """Resolve the correct postal code for an ambiguous location.
+
+    Uses Grok with web search to disambiguate the place name based on
+    the provided GPS coordinates.
+
+    Args:
+        location: Place name that may be ambiguous (e.g. "Linz").
+        lat: Latitude of the caller's location.
+        lon: Longitude of the caller's location.
+
+    Returns:
+        A 4-or-5-digit postal code string, or ``None`` on failure/timeout.
+    """
+    if not location:
+        return None
+
+    system_prompt = """
+Du bist ein Experte für Postleitzahlen in Deutschland, Österreich und der Schweiz.
+
+Gegeben ist ein Ortsname und GPS-Koordinaten. Deine Aufgabe:
+1. Prüfe, ob der Ortsname mehrdeutig ist (z.B. "Linz" gibt es in AT und DE, "Neustadt" gibt es viele).
+2. Falls mehrdeutig, bestimme anhand der Koordinaten, welcher Ort gemeint ist.
+3. Gib die korrekte Postleitzahl zurück.
+4. Nutze internet suche
+
+Ausgabeformat (NUR eine Zeile, keine Erklärung):
+- Falls mehrdeutig und Koordinaten helfen: Die korrekte PLZ (z.B. "4020")
+- Gebe immer die PLZ egal ob eindeutig oder nicht: München -> 80331
+
+Beispiele:
+- Linz mit Koordinaten nahe Österreich (48.3, 14.3) -> 4020
+- Linz mit Koordinaten nahe Deutschland (50.5, 7.3) -> 53545
+- München (eindeutig) -> 80331
+"""
+
+    try:
+        response = await asyncio.wait_for(
+            _ask_grok(system_prompt, f'Koordinaten: ({lat}, {lon}), Welche PLZ ist das?', use_web_search=True),
+            timeout=5.0
         )
-
-        duration = time.monotonic() - start
-        # Cache the result including duration (reasoning intentionally omitted)
-        cache_manager.set(
-            "process_location",
-            cache_input,
-            {
-                "contains_loc": contains_loc,
-                "contains_city": contains_city_bool,
-                "knows_location": knows_location_bool,
-                "address": extracted_address,
-                "duration": duration,
-            },
-        )
-
-        return (
-            contains_loc,
-            contains_city_bool,
-            knows_location_bool,
-            extracted_address,
-            duration,
-            model_source,
-        )
-
+        response = response.strip()
+        if response.isdigit() and 4 <= len(response) <= 5:
+            logger.info("Corrected PLZ for '%s' to '%s'", location, response)
+            return response
+        return None
+    except asyncio.TimeoutError:
+        logger.warning("correct_plz timed out for '%s'", location)
+        return None
     except Exception as e:
-        logger.error(f"Error in process_location: {e}")
-        return False, None, "", None, "unknown"
-
-
-if __name__ == "__main__":
-
-    async def main():
-        text = "Johann Wilhelm Kleinstraße einundfünfzig"
-        contains_loc, contains_city, address, duration, model = await process_location(
-            text
-        )
-        print(f"Contains location: {contains_loc}")
-        print(f"Contains city: {contains_city}")
-        print(f"Extracted address: {address}")
-        print(f"Duration: {duration}")
-        print(f"Model used: {model}")
-
-    asyncio.run(main())
+        logger.error("Error in correct_plz: %s", e)
+        return None

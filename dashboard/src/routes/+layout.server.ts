@@ -14,9 +14,15 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
 		throw redirect(302, "/auth/login");
 	}
 
-	const session = JSON.parse(sessionCookie);
+	let session: { user: unknown; accessToken: string; expiresAt: number };
+	try {
+		session = JSON.parse(sessionCookie);
+	} catch {
+		cookies.delete("session", { path: "/" });
+		throw redirect(302, "/auth/login");
+	}
 
-	if (session.expiresAt < Date.now()) {
+	if (!session.expiresAt || session.expiresAt < Date.now()) {
 		cookies.delete("session", { path: "/" });
 		throw redirect(302, "/auth/login");
 	}

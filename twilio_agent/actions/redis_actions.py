@@ -5,11 +5,8 @@ import logging
 import os
 import zoneinfo
 
-import dotenv
 import yaml
 from redis import Redis
-
-dotenv.load_dotenv()
 
 logger = logging.getLogger("uvicorn")
 

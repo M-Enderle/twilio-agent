@@ -3,223 +3,233 @@
 import hashlib
 import json
 import logging
+import uuid
 from typing import Optional
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from twilio_agent.api.auth_middleware import require_auth
-from twilio_agent.utils.contacts import ContactManager
-from twilio_agent.utils.settings import SettingsManager
+from twilio_agent.settings import (
+    settings,
+    VALID_SERVICES,
+    PhoneNumber,
+    EmergencyContact,
+    DirectForwarding,
+    ActiveHours,
+    Pricing,
+    Announcements,
+    Location,
+    LocationContact,
+)
 from twilio_agent.utils.location_utils import get_geocode_result
-from twilio_agent.utils.pricing import get_pricing as get_pricing_config, set_pricing as set_pricing_config
-from twilio_agent.actions.redis_actions import redis
+from twilio_agent.actions.redis_actions import (
+    redis,
+    get_available_recordings,
+    get_call_recording_binary,
+)
 
 logger = logging.getLogger("uvicorn")
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
-# Shared manager instances
-cm = ContactManager()
-sm = SettingsManager()
+
+def _validate_service(service_id: str):
+    if service_id not in VALID_SERVICES:
+        raise HTTPException(status_code=400, detail=f"Invalid service: {service_id}")
 
 
 # ── Pydantic models ────────────────────────────────────────────────
 
-class ContactCreate(BaseModel):
-    name: str
-    phone: str
-    address: str = ""
-    zipcode: str | int = ""
-    fallback: bool = False
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    fallbacks_json: str = "[]"
-
-
-class ContactUpdate(BaseModel):
-    name: Optional[str] = None
-    phone: Optional[str] = None
-    address: Optional[str] = None
-    zipcode: Optional[str | int] = None
-    fallback: Optional[bool] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    fallbacks_json: Optional[str] = None
+class ReorderRequest(BaseModel):
+    ids: list[str]
 
 
 class GeocodeRequest(BaseModel):
     address: str
 
 
-class ReorderRequest(BaseModel):
-    ids: list[str]
+# ── Locations (/services/{service_id}/locations) ──────────────────
+
+@router.get("/services/{service_id}/locations")
+async def get_locations(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).locations
 
 
-class VacationModeUpdate(BaseModel):
-    active: bool = False
-    substitute_phone: str = ""
+@router.post("/services/{service_id}/locations", status_code=201)
+async def create_location(service_id: str, body: Location):
+    _validate_service(service_id)
+    # Ensure ID
+    if not body.id:
+        body.id = str(uuid.uuid4())
+
+    svc = settings.service(service_id)
+    locations = svc.locations
+    locations.append(body)
+    svc.locations = locations
+    return body
 
 
-class EmergencyContactUpdate(BaseModel):
-    contact_id: str = ""
-    contact_name: str = ""
+@router.put("/services/{service_id}/locations/reorder")
+async def reorder_locations(service_id: str, body: ReorderRequest):
+    _validate_service(service_id)
+    svc = settings.service(service_id)
+    locations = svc.locations
+
+    # Map by ID
+    by_id = {loc.id: loc for loc in locations}
+    reordered = []
+
+    # Add in requested order
+    for rid in body.ids:
+        if rid in by_id:
+            reordered.append(by_id[rid])
+
+    # Append any remaining not in the list
+    seen = set(body.ids)
+    for loc in locations:
+        if loc.id not in seen:
+            reordered.append(loc)
+
+    svc.locations = reordered
+    return reordered
 
 
-class ActiveHoursUpdate(BaseModel):
-    day_start: int
-    day_end: int
+@router.put("/services/{service_id}/locations/{location_id}")
+async def update_location(service_id: str, location_id: str, body: Location):
+    _validate_service(service_id)
+    svc = settings.service(service_id)
+    locations = svc.locations
+
+    for i, loc in enumerate(locations):
+        if loc.id == location_id:
+            # Update fields, preserving ID
+            body.id = location_id
+            locations[i] = body
+            svc.locations = locations
+            return body
+
+    raise HTTPException(status_code=404, detail="Location not found")
 
 
-class DirectForwardingUpdate(BaseModel):
-    active: bool = False
-    forward_phone: str = ""
-    start_hour: float = 0.0
-    end_hour: float = 6.0
+@router.delete("/services/{service_id}/locations/{location_id}")
+async def delete_location(service_id: str, location_id: str):
+    _validate_service(service_id)
+    svc = settings.service(service_id)
+    locations = svc.locations
 
+    # Filter out
+    new_locations = [loc for loc in locations if loc.id != location_id]
 
-class PricingTier(BaseModel):
-    minutes: int
-    dayPrice: int
-    nightPrice: int
+    if len(new_locations) == len(locations):
+        raise HTTPException(status_code=404, detail="Location not found")
 
-
-class ServicePricing(BaseModel):
-    tiers: list[PricingTier]
-    fallbackDayPrice: int
-    fallbackNightPrice: int
-
-
-class PricingUpdate(BaseModel):
-    locksmith: ServicePricing
-    towing: ServicePricing
-
-
-# ── Contacts ───────────────────────────────────────────────────────
-
-@router.get("/contacts")
-async def get_contacts():
-    return cm.get_all_contacts()
-
-
-@router.post("/contacts/{category}", status_code=201)
-async def create_contact(category: str, body: ContactCreate):
-    if category not in ("locksmith", "towing"):
-        raise HTTPException(status_code=400, detail="Invalid category")
-    contact = cm.add_contact(category, body.model_dump())
-    return contact
-
-
-@router.put("/contacts/{category}/reorder")
-async def reorder_contacts(category: str, body: ReorderRequest):
-    if category not in ("locksmith", "towing"):
-        raise HTTPException(status_code=400, detail="Invalid category")
-    return cm.reorder_contacts(category, body.ids)
-
-
-@router.put("/contacts/{category}/{contact_id}")
-async def update_contact(category: str, contact_id: str, body: ContactUpdate):
-    if category not in ("locksmith", "towing"):
-        raise HTTPException(status_code=400, detail="Invalid category")
-    data = {k: v for k, v in body.model_dump().items() if v is not None}
-    updated = cm.update_contact(category, contact_id, data)
-    if not updated:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return updated
-
-
-@router.delete("/contacts/{category}/{contact_id}")
-async def delete_contact(category: str, contact_id: str):
-    if category not in ("locksmith", "towing"):
-        raise HTTPException(status_code=400, detail="Invalid category")
-    deleted = cm.delete_contact(category, contact_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    svc.locations = new_locations
     return {"status": "deleted"}
 
 
-# ── Vacation mode ─────────────────────────────────────────────────
+# ── Settings (/services/{service_id}/settings/*) ──────────────────
 
-@router.get("/settings/vacation")
-async def get_vacation_mode():
-    return sm.get_vacation_mode()
-
-
-@router.put("/settings/vacation")
-async def update_vacation_mode(body: VacationModeUpdate):
-    sm.set_vacation_mode(body.model_dump())
-    return body.model_dump()
+@router.get("/services/{service_id}/settings/phone-number")
+async def get_phone_number(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).phone_number
 
 
-# ── Emergency contact ─────────────────────────────────────────────
-
-@router.get("/settings/emergency-contact")
-async def get_emergency_contact():
-    return sm.get_emergency_contact()
-
-
-@router.put("/settings/emergency-contact")
-async def update_emergency_contact(body: EmergencyContactUpdate):
-    sm.set_emergency_contact(body.model_dump())
-    return body.model_dump()
+@router.put("/services/{service_id}/settings/phone-number")
+async def update_phone_number(service_id: str, body: PhoneNumber):
+    _validate_service(service_id)
+    settings.service(service_id).phone_number = body
+    return body
 
 
-# ── Direct forwarding ──────────────────────────────────────────────
-
-@router.get("/settings/direct-forwarding")
-async def get_direct_forwarding():
-    return sm.get_direct_forwarding()
-
-
-@router.put("/settings/direct-forwarding")
-async def update_direct_forwarding(body: DirectForwardingUpdate):
-    sm.set_direct_forwarding(body.model_dump())
-    return body.model_dump()
+@router.get("/services/{service_id}/settings/emergency-contact")
+async def get_emergency_contact(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).emergency_contact
 
 
-# ── Settings ───────────────────────────────────────────────────────
-
-@router.get("/settings/active-hours")
-async def get_active_hours():
-    return sm.get_active_hours()
-
-
-@router.put("/settings/active-hours")
-async def update_active_hours(body: ActiveHoursUpdate):
-    sm.set_active_hours(body.model_dump())
-    return body.model_dump()
+@router.put("/services/{service_id}/settings/emergency-contact")
+async def update_emergency_contact(service_id: str, body: EmergencyContact):
+    _validate_service(service_id)
+    settings.service(service_id).emergency_contact = body
+    return body
 
 
-# ── Status ─────────────────────────────────────────────────────────
+@router.get("/services/{service_id}/settings/direct-forwarding")
+async def get_direct_forwarding(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).direct_forwarding
+
+
+@router.put("/services/{service_id}/settings/direct-forwarding")
+async def update_direct_forwarding(service_id: str, body: DirectForwarding):
+    _validate_service(service_id)
+    settings.service(service_id).direct_forwarding = body
+    return body
+
+
+@router.get("/services/{service_id}/settings/active-hours")
+async def get_active_hours(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).active_hours
+
+
+@router.put("/services/{service_id}/settings/active-hours")
+async def update_active_hours(service_id: str, body: ActiveHours):
+    _validate_service(service_id)
+    settings.service(service_id).active_hours = body
+    return body
+
+
+@router.get("/services/{service_id}/settings/pricing")
+async def get_pricing(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).pricing
+
+
+@router.put("/services/{service_id}/settings/pricing")
+async def update_pricing(service_id: str, body: Pricing):
+    _validate_service(service_id)
+    settings.service(service_id).pricing = body
+    return body
+
+
+# ── Announcements (/services/{service_id}/settings/announcements) ─
+
+@router.get("/services/{service_id}/settings/announcements")
+async def get_announcements(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).announcements
+
+
+@router.put("/services/{service_id}/settings/announcements")
+async def update_announcements(service_id: str, body: Announcements):
+    _validate_service(service_id)
+    settings.service(service_id).announcements = body
+    return body
+
+
+# ── Status (global) ───────────────────────────────────────────────
 
 @router.get("/status")
 async def system_status():
-    contacts = cm.get_all_contacts()
-    hours = sm.get_active_hours()
-    vacation = sm.get_vacation_mode()
-    total = sum(len(v) for v in contacts.values())
+    total = 0
+    services = {}
+    for svc in VALID_SERVICES:
+        locations = settings.service(svc).locations
+        services[svc] = len(locations)
+        total += len(locations)
     return {
-        "total_contacts": total,
-        "vacation_active": vacation.get("active", False),
-        "active_hours": hours,
-        "categories": {k: len(v) for k, v in contacts.items()},
+        "total_locations": total,
+        "services": services,
     }
 
 
-# ── Pricing ───────────────────────────────────────────────────────────
-
-@router.get("/settings/pricing")
-async def get_pricing():
-    return get_pricing_config()
-
-
-@router.put("/settings/pricing")
-async def update_pricing(body: PricingUpdate):
-    set_pricing_config(body.model_dump())
-    return body.model_dump()
-
-
-# ── Geocoding ─────────────────────────────────────────────────────────
+# ── Geocoding (global) ──────────────────────────────────────────
 
 @router.post("/geocode")
 async def geocode_address(body: GeocodeRequest):
@@ -233,77 +243,211 @@ async def geocode_address(body: GeocodeRequest):
     }
 
 
-# ── Service Territories (cached driving time grid) ─────────────────
+# ── Service Territories (/services/{service_id}/territories) ─────
 
 class TerritoryData(BaseModel):
     grid: list[dict]
-    contacts_hash: str
+    locations_hash: str
     computed_at: str | None
     is_partial: bool = False
     total_points: int = 0
+    bounds: dict | None = None
 
 
-def _compute_contacts_hash(category: str) -> str:
-    """Compute a hash of contact coordinates to detect changes."""
-    contacts = cm.get_all_contacts().get(category, [])
-    # Only include non-fallback contacts with coordinates
+def _compute_locations_hash(service_id: str) -> str:
+    """Compute a hash of location coordinates to detect changes."""
+    locations = settings.service(service_id).locations
     coords = sorted([
-        f"{c.get('latitude', 0):.6f},{c.get('longitude', 0):.6f}"
-        for c in contacts
-        if not c.get("fallback") and c.get("latitude") and c.get("longitude")
+        f"{loc.latitude:.6f},{loc.longitude:.6f}"
+        for loc in locations
+        if loc.latitude and loc.longitude
     ])
     return hashlib.md5("|".join(coords).encode()).hexdigest()[:12]
 
 
-@router.get("/territories/{category}")
-async def get_territories(category: str):
-    """Get cached territory data if it exists and contacts haven't changed."""
-    if category not in ("locksmith", "towing"):
-        raise HTTPException(status_code=400, detail="Invalid category")
+@router.get("/services/{service_id}/territories")
+async def get_territories(service_id: str):
+    """Get cached territory data if it exists and locations haven't changed."""
+    _validate_service(service_id)
 
-    current_hash = _compute_contacts_hash(category)
-    cache_key = f"notdienststation:territories:{category}"
+    current_hash = _compute_locations_hash(service_id)
+    cache_key = f"notdienststation:{service_id}:territories"
 
     cached = redis.get(cache_key)
     if cached:
         data = json.loads(cached.decode("utf-8"))
-        # Check if contacts have changed
-        if data.get("contacts_hash") == current_hash:
+        if data.get("locations_hash") == current_hash:
             return data
 
     # No valid cache - check for partial progress
-    partial_key = f"notdienststation:territories:{category}:partial"
+    partial_key = f"notdienststation:{service_id}:territories:partial"
     partial = redis.get(partial_key)
     if partial:
         partial_data = json.loads(partial.decode("utf-8"))
-        if partial_data.get("contacts_hash") == current_hash:
+        if partial_data.get("locations_hash") == current_hash:
             return partial_data
 
-    # No cache at all
-    return {"grid": [], "contacts_hash": current_hash, "computed_at": None, "is_partial": False, "total_points": 0}
+    return {"grid": [], "locations_hash": current_hash, "computed_at": None, "is_partial": False, "total_points": 0}
 
 
-@router.post("/territories/{category}")
-async def save_territories(category: str, body: TerritoryData):
+@router.post("/services/{service_id}/territories")
+async def save_territories(service_id: str, body: TerritoryData):
     """Save computed territory data to cache."""
-    if category not in ("locksmith", "towing"):
-        raise HTTPException(status_code=400, detail="Invalid category")
+    _validate_service(service_id)
 
-    # Compute hash from current contacts (ignore frontend hash to ensure consistency)
-    current_hash = _compute_contacts_hash(category)
+    current_hash = _compute_locations_hash(service_id)
     data_to_save = body.model_dump()
-    data_to_save["contacts_hash"] = current_hash
+    data_to_save["locations_hash"] = current_hash
 
     if body.is_partial:
-        # Save to partial cache (intermediate progress)
-        partial_key = f"notdienststation:territories:{category}:partial"
-        redis.set(partial_key, json.dumps(data_to_save), ex=3600)  # 1 hour expiry
+        partial_key = f"notdienststation:{service_id}:territories:partial"
+        redis.set(partial_key, json.dumps(data_to_save), ex=3600)
         return {"status": "partial_saved", "grid_size": len(body.grid)}
     else:
-        # Save to main cache (complete data)
-        cache_key = f"notdienststation:territories:{category}"
+        cache_key = f"notdienststation:{service_id}:territories"
         redis.set(cache_key, json.dumps(data_to_save))
-        # Clear partial cache
-        partial_key = f"notdienststation:territories:{category}:partial"
+        partial_key = f"notdienststation:{service_id}:territories:partial"
         redis.delete(partial_key)
         return {"status": "saved", "grid_size": len(body.grid)}
+
+
+# ── Calls (/calls) ───────────────────────────────────────────────
+
+def _parse_info_yaml(raw_bytes: bytes) -> dict:
+    """Parse a YAML info blob (list-of-dicts) into a single merged dict."""
+    info_raw = yaml.safe_load(raw_bytes.decode("utf-8"))
+    info: dict = {}
+    if isinstance(info_raw, list):
+        for item in info_raw:
+            if isinstance(item, dict):
+                info.update(item)
+    elif isinstance(info_raw, dict):
+        info = info_raw
+    return info
+
+
+@router.get("/calls")
+async def list_calls():
+    """List all calls from Redis using SCAN."""
+    calls = []
+    cursor = 0
+    pattern = "notdienststation:verlauf:*:info"
+
+    while True:
+        cursor, keys = redis.scan(cursor=cursor, match=pattern, count=200)
+        for key in keys:
+            key_str = key.decode("utf-8") if isinstance(key, bytes) else key
+            # Key format: notdienststation:verlauf:{number}:{timestamp}:info
+            parts = key_str.split(":")
+            if len(parts) < 5:
+                continue
+            number = parts[2]
+            timestamp = parts[3]
+
+            raw = redis.get(key)
+            if not raw:
+                continue
+
+            try:
+                info = _parse_info_yaml(raw)
+            except Exception:
+                continue
+
+            raw_live = info.get("Live", False)
+            is_live = raw_live is True or str(raw_live).lower() in ("ja", "true", "yes")
+
+            # Cross-check: if the active call key has expired, the call is not live
+            if is_live:
+                call_number = info.get("Anrufnummer", "+" + number[2:] if number.startswith("00") else number)
+                active_key = f"notdienststation:anrufe:{call_number}:gestartet_um"
+                if not redis.exists(active_key):
+                    is_live = False
+
+            calls.append({
+                "number": number,
+                "timestamp": timestamp,
+                "phone": info.get("Anrufnummer", info.get("Telefonnummer", number)),
+                "start_time": info.get("Startzeit", ""),
+                "intent": info.get("Anliegen", ""),
+                "live": is_live,
+                "location": info.get("Standort", ""),
+                "provider": info.get("Anbieter", ""),
+                "price": info.get("Preis", ""),
+                "hangup_reason": info.get("hangup_reason", ""),
+                "transferred_to": info.get("Weitergeleitet an", ""),
+            })
+
+        if cursor == 0:
+            break
+
+    # Sort by timestamp descending
+    calls.sort(key=lambda c: c["timestamp"], reverse=True)
+    return {"calls": calls, "total": len(calls)}
+
+
+@router.get("/calls/{number}/{timestamp}")
+async def get_call_detail(number: str, timestamp: str):
+    """Get full detail for a single call."""
+    redis_info = redis.get(
+        f"notdienststation:verlauf:{number}:{timestamp}:info"
+    )
+    if not redis_info:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    info = _parse_info_yaml(redis_info)
+
+    # Cross-check live status against the active call key
+    raw_live = info.get("Live", False)
+    if raw_live is True or str(raw_live).lower() in ("ja", "true", "yes"):
+        call_number = info.get("Anrufnummer", "+" + number[2:] if number.startswith("00") else number)
+        active_key = f"notdienststation:anrufe:{call_number}:gestartet_um"
+        if not redis.exists(active_key):
+            info["Live"] = "Nein"
+
+    # Parse messages
+    redis_messages = redis.get(
+        f"notdienststation:verlauf:{number}:{timestamp}:nachrichten"
+    )
+    messages_raw = (
+        yaml.safe_load(redis_messages.decode("utf-8")) if redis_messages else []
+    )
+    messages = []
+    for entry in messages_raw or []:
+        if not isinstance(entry, dict):
+            continue
+        raw_role = str(entry.get("role", "assistant"))
+        role_class = raw_role.lower().replace(" ", "-")
+        content = entry.get("content", "")
+        model = entry.get("model")
+        msg = {"role": raw_role, "role_class": role_class, "content": content}
+        if model:
+            msg["model"] = model
+        messages.append(msg)
+
+    # Recordings (metadata only — no base64 data)
+    recordings_raw = get_available_recordings(number, timestamp) or {}
+    recordings: dict[str, dict] = {}
+    for rec_type, payload in recordings_raw.items():
+        if not isinstance(payload, dict):
+            continue
+        enriched = {
+            "recording_type": payload.get("recording_type", rec_type),
+            "content_type": payload.get("content_type", "audio/mpeg"),
+            "metadata": payload.get("metadata", {}),
+            "number": number,
+            "timestamp": timestamp,
+        }
+        recordings[rec_type] = enriched
+
+    return {"info": info, "messages": messages, "recordings": recordings}
+
+
+@router.get("/calls/{number}/{timestamp}/recording/{recording_type}")
+async def get_call_recording(number: str, timestamp: str, recording_type: str):
+    """Proxy audio binary through authenticated endpoint."""
+    audio_bytes, content_type = get_call_recording_binary(
+        number, timestamp, recording_type
+    )
+    if not audio_bytes:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    return Response(content=audio_bytes, media_type=content_type)

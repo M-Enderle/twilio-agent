@@ -113,6 +113,7 @@ async def send_sms_unified(request: Request):
     send_sms_with_link(caller_number)
     save_job_info(caller_number, "hangup_reason", "Warte auf Standort per SMS")
     save_job_info(caller_number, "waiting_for_sms", "Ja")
+    save_job_info(caller_number, "Live", "Nein")
     logger.info("SMS with link sent, waiting for location...")
 
     with new_response() as response:

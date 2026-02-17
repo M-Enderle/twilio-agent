@@ -3,8 +3,7 @@
 FROM python:3.10-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -29,32 +28,37 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 
 FROM base AS dependencies
 
-# Copy full project to build/install via PEP 621
-COPY . .
+# Copy ONLY dependency-defining files (cache-friendly: code changes won't bust this layer)
+COPY pyproject.toml poetry.lock ./
 
-# Install project and dependencies into system site-packages
-RUN pip install --no-cache-dir .
+# Create minimal package stub so pip can resolve the project
+RUN mkdir -p twilio_agent && touch twilio_agent/__init__.py
+
+# Install deps with persistent cache mount across builds
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install .
 
 
 FROM base AS svelte-build
 
 WORKDIR /app/dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 COPY dashboard/ .
 RUN npx svelte-kit sync && npm run build
 
 
 FROM base AS production
 
-# Create non-root user and prepare directories
+# Prepare directories
 RUN mkdir -p /app/logs \
     && mkdir -p /app/ai_cache
 
-# Copy site-packages and deps layer
+# Copy installed Python packages from dependencies stage
 COPY --from=dependencies /usr/local /usr/local
 
-# Copy application source (for static/templates and runtime assets)
+# Copy application source
 COPY . .
 
 # Copy SvelteKit build

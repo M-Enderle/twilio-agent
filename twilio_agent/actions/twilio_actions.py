@@ -5,7 +5,6 @@ import os
 import time
 from contextlib import contextmanager
 
-import dotenv
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from twilio.rest import Client
@@ -22,7 +21,6 @@ from twilio_agent.actions.redis_actions import (agent_message, delete_job_info,
 from twilio_agent.utils.eleven import cache_manager, generate_speech
 from twilio_agent.utils.pricing import get_price_locksmith, get_price_towing
 
-dotenv.load_dotenv()
 logger = logging.getLogger("uvicorn")
 
 account_sid = os.environ["TWILIO_ACCOUNT_SID"]
@@ -32,12 +30,6 @@ twilio_phone_number = os.environ["TWILIO_PHONE_NUMBER"]
 notdienststation_phone_number = os.environ["NOTDIENSTSTATION_PHONE_NUMBER"]
 
 client = Client(account_sid, auth_token)
-
-twilio_logger = logging.getLogger("twilio.http_client")
-twilio_logger.setLevel(logging.WARNING)
-
-httpx_logger = logging.getLogger("httpx")
-httpx_logger.setLevel(logging.WARNING)
 
 
 async def caller(request: Request):

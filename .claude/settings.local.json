@@ -20,7 +20,9 @@
       "Bash(docker compose:*)",
       "Bash(npm run check:*)",
       "Bash(npm run build:*)",
-      "WebFetch(domain:project-osrm.org)"
+      "WebFetch(domain:project-osrm.org)",
+      "WebFetch(domain:docs.x.ai)",
+      "Bash(poetry add:*)"
     ]
   }
 }

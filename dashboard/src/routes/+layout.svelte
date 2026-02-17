@@ -3,25 +3,32 @@
 	import { page } from "$app/state";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
-	import UsersIcon from "@lucide/svelte/icons/users";
+	import MapPinIcon from "@lucide/svelte/icons/map-pin";
+	import PhoneIcon from "@lucide/svelte/icons/phone";
 	import EuroIcon from "@lucide/svelte/icons/euro";
+	import MessageSquareTextIcon from "@lucide/svelte/icons/message-square-text";
 	import LogOutIcon from "@lucide/svelte/icons/log-out";
 	import { setToken } from "$lib/api";
 	import { onMount } from "svelte";
+	import { SERVICES, type ServiceId } from "$lib/types";
+	import { getSelectedService, setSelectedService } from "$lib/service.svelte";
 
 	let { children, data } = $props();
 
 	const navItems = [
-		{ href: "/kontakte", label: "Kontakte", icon: UsersIcon },
+		{ href: "/standorte", label: "Standorte", icon: MapPinIcon },
+		{ href: "/anrufe", label: "Anrufe", icon: PhoneIcon },
 		{ href: "/preise", label: "Preise", icon: EuroIcon },
+		{ href: "/ansagen", label: "Ansagen", icon: MessageSquareTextIcon },
 		{ href: "/einstellungen", label: "Einstellungen", icon: SettingsIcon },
 	];
 
 	const isAuthPage = $derived(page.url.pathname.startsWith("/auth"));
+	const selectedService = $derived(getSelectedService());
 
 	onMount(() => {
 		if (data.apiUrl) {
-			(window as any).__API_URL__ = data.apiUrl;
+			window.__API_URL__ = data.apiUrl;
 		}
 		if (data.accessToken) {
 			setToken(data.accessToken);
@@ -44,6 +51,23 @@
 				</div>
 			</Sidebar.Header>
 			<Sidebar.Content>
+				<Sidebar.Group>
+					<Sidebar.GroupLabel>Dienst</Sidebar.GroupLabel>
+					<Sidebar.GroupContent>
+						<div class="px-2">
+							<select
+								aria-label="Dienst auswählen"
+								class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+								value={selectedService}
+								onchange={(e) => setSelectedService((e.target as HTMLSelectElement).value as ServiceId)}
+							>
+								{#each SERVICES as svc}
+									<option value={svc.id}>{svc.shortLabel}</option>
+								{/each}
+							</select>
+						</div>
+					</Sidebar.GroupContent>
+				</Sidebar.Group>
 				<Sidebar.Group>
 					<Sidebar.GroupLabel>Navigation</Sidebar.GroupLabel>
 					<Sidebar.GroupContent>

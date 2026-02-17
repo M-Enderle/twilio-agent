@@ -77,6 +77,7 @@ async def add_locksmith_contacts(request: Request):
     caller_number = await get_caller_number(request)
     clear_caller_queue(caller_number)
 
+<<<<<<< HEAD
     # Use locksmith service settings
     svc = settings.service("notdienst-schluessel")
     locations = svc.locations
@@ -84,6 +85,12 @@ async def add_locksmith_contacts(request: Request):
     # Get emergency contact (fallback/preferred) from settings
     emergency_contact = svc.emergency_contact
     first_location_name = get_job_info(caller_number, "Anbieter") or emergency_contact.name
+=======
+    cm = ContactManager()
+    sm = SettingsManager()
+    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact().get("contact_name")
+    contacts = cm.get_contacts_for_category("locksmith")
+>>>>>>> 3116cfc76fe1cee30f0373e4180831ba5ba5a632
 
     # If a specific provider was determined (e.g. by pricing), add them first
     for location in locations:
@@ -101,9 +108,16 @@ async def add_towing_contacts(request: Request):
     caller_number = await get_caller_number(request)
     clear_caller_queue(caller_number)
 
+<<<<<<< HEAD
     svc = settings.service("notdienst-abschlepp")
     locations = svc.locations
     emergency_contact = svc.emergency_contact
+=======
+    cm = ContactManager()
+    sm = SettingsManager()
+    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact().get("contact_name")
+    contacts = cm.get_contacts_for_category("towing")
+>>>>>>> 3116cfc76fe1cee30f0373e4180831ba5ba5a632
 
     first_location_name = get_job_info(caller_number, "Anbieter") or emergency_contact.name
 

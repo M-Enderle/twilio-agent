@@ -5,7 +5,6 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import dotenv
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
@@ -16,16 +15,15 @@ from twilio_agent.actions.redis_actions import google_message
 
 logger = logging.getLogger("uvicorn")
 
-dotenv.load_dotenv()
-STANDORT_URL = os.getenv("STANDORT_URL", "https://9e4c482f86de.ngrok-free.app/location")
-SERVER_URL = os.getenv("SERVER_URL", "https://9e4c482f86de.ngrok-free.app")
+STANDORT_URL = os.getenv("STANDORT_URL")
+SERVER_URL = os.getenv("SERVER_URL")
 
 template_dir = Path(__file__).resolve().parents[2] / "templates"
 jinja_env = Environment(
     loader=FileSystemLoader(template_dir, encoding="utf-8"), autoescape=True
 )
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379")
+REDIS_URL = os.getenv("REDIS_URL")
 redis_client = Redis.from_url(REDIS_URL)
 
 router = APIRouter()

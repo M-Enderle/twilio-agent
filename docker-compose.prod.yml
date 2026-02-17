@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
+      args:
+        BUILDKIT_INLINE_CACHE: "1"
     container_name: twilio-agent-app
     ports:
       - "8000:8000"
