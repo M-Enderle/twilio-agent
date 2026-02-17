@@ -1,94 +1,46 @@
 <script lang="ts">
 	import { onMount, onDestroy } from "svelte";
-	import type { Standort } from "$lib/types";
+	import type { Standort, CallSummary } from "$lib/types";
 	import type L from "leaflet";
-	import { getTerritories, saveTerritories } from "$lib/api";
+	import { getTerritories } from "$lib/api";
 	import type { ServiceId } from "$lib/types";
 
 	interface Props {
 		standorte: Standort[];
+		calls: CallSummary[];
 		serviceId: ServiceId;
 		onstandortclick?: (id: string) => void;
 	}
 
-	let { standorte, serviceId, onstandortclick }: Props = $props();
+	let { standorte, calls, serviceId, onstandortclick }: Props = $props();
 	let mapContainer: HTMLDivElement;
 	let map: L.Map | null = null;
 	let markers: L.Marker[] = [];
+	let callMarkers: L.Marker[] = [];
 	let territoryRects: L.Rectangle[] = [];
 	let borderLines: L.Polyline[] = [];
 	let leaflet: typeof L | null = null;
 
-	// Loading state for OSRM requests
+	// Loading state for territory display
 	let loadingTerritories = $state(false);
-	let loadingProgress = $state(0);
 
-	// Expose refresh function
+	// Expose refresh function (now only refreshes display, doesn't recalculate)
 	export function refresh() {
 		if (map && leaflet) {
-			// Clear cache and recompute
+			// Clear and reload from cache
 			territoryGrid = [];
 			territoryBounds = null;
-			fetchInProgress = false;
 			territoryRects.forEach((r) => r.remove());
 			territoryRects = [];
 			borderLines.forEach((l) => l.remove());
 			borderLines = [];
 			updateMarkers();
-			fetchDrivingTimeTerritories(true);
+			loadCachedTerritories();
 		}
 	}
 
-	// Grid configuration
-	const GRID_SIZE = 32; // 32x32 = 1024 points
-	const BATCH_SIZE = 20;
-	const MAX_DISTANCE_KM = 50; // Only include grid points within this distance of any contact
-
-	// Haversine distance in km
-	function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
-		const R = 6371;
-		const dLat = ((lat2 - lat1) * Math.PI) / 180;
-		const dLng = ((lng2 - lng1) * Math.PI) / 180;
-		const a =
-			Math.sin(dLat / 2) ** 2 +
-			Math.cos((lat1 * Math.PI) / 180) *
-				Math.cos((lat2 * Math.PI) / 180) *
-				Math.sin(dLng / 2) ** 2;
-		return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-	}
-
-	// Compute dynamic bounds from standorte + 50km padding
-	function computeBounds(items: typeof mappableStandorte): { minLat: number; maxLat: number; minLng: number; maxLng: number } {
-		const lats = items.filter(c => c.latitude).map(c => c.latitude!);
-		const lngs = items.filter(c => c.longitude).map(c => c.longitude!);
-
-		if (lats.length === 0 || lngs.length === 0) {
-			// Fallback to Germany if no standorte
-			return { minLat: 47.2, maxLat: 55.0, minLng: 5.8, maxLng: 15.0 };
-		}
-
-		// ~50km in degrees (rough approximation)
-		const latPadding = MAX_DISTANCE_KM / 111; // 1 degree lat ≈ 111km
-		const avgLat = (Math.min(...lats) + Math.max(...lats)) / 2;
-		const lngPadding = MAX_DISTANCE_KM / (111 * Math.cos(avgLat * Math.PI / 180));
-
-		return {
-			minLat: Math.min(...lats) - latPadding,
-			maxLat: Math.max(...lats) + latPadding,
-			minLng: Math.min(...lngs) - lngPadding,
-			maxLng: Math.max(...lngs) + lngPadding,
-		};
-	}
-
-	function isPointRelevant(lat: number, lng: number, items: typeof mappableStandorte): boolean {
-		for (const c of items) {
-			if (c.latitude && c.longitude) {
-				const dist = haversineKm(lat, lng, c.latitude, c.longitude);
-				if (dist <= MAX_DISTANCE_KM) return true;
-			}
-		}
-		return false;
-	}
+	// Grid configuration (matched with backend)
+	const GRID_SIZE = 32;
 
 	// Color palette for territory regions
 	const regionColors = [
@@ -116,6 +68,26 @@
 			.filter((s) => s.latitude && s.longitude)
 	);
 
+	// Filter calls from past 30 days with location data
+	const recentCalls = $derived.by(() => {
+		const thirtyDaysAgo = new Date();
+		thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+		return calls.filter((call) => {
+			if (!call.latitude || !call.longitude) return false;
+
+			// Parse timestamp from call (format: YYYYMMDD_HHMMSS)
+			const timestamp = call.timestamp;
+			const dateStr = timestamp.split('_')[0]; // Get YYYYMMDD part
+			const year = parseInt(dateStr.substring(0, 4));
+			const month = parseInt(dateStr.substring(4, 6)) - 1;
+			const day = parseInt(dateStr.substring(6, 8));
+			const callDate = new Date(year, month, day);
+
+			return callDate >= thirtyDaysAgo;
+		});
+	});
+
 	onMount(async () => {
 		leaflet = (await import("leaflet")).default;
 		await import("leaflet/dist/leaflet.css");
@@ -138,175 +110,30 @@
 			.addTo(map);
 
 		updateMarkers();
-		fetchDrivingTimeTerritories();
+		loadCachedTerritories();
 	});
 
-	function computeLocationsHash(): string {
-		return mappableStandorte
-			.map((c) => `${c.latitude?.toFixed(6)},${c.longitude?.toFixed(6)}`)
-			.sort()
-			.join("|")
-			.slice(0, 12);
-	}
-
-	async function fetchDrivingTimeTerritories(forceRefresh = false) {
+	async function loadCachedTerritories() {
 		if (!map || !leaflet || mappableStandorte.length < 2) return;
 		if (fetchInProgress) return;
 		fetchInProgress = true;
 
 		loadingTerritories = true;
-		loadingProgress = 0;
-
-		const locationsHash = computeLocationsHash();
 
 		try {
-			// Try to load from backend cache first (unless force refresh)
-			let cachedResults: { lat: number; lng: number; contactIndex: number }[] = [];
-			let resumeFromPartial = false;
-
-			if (!forceRefresh) {
-				try {
-					const cached = await getTerritories(serviceId);
-					if (cached.grid && cached.grid.length > 0) {
-						if (cached.computed_at && !cached.is_partial) {
-							// Complete cache - use it with its stored bounds
-							console.log("Using cached territory data from", cached.computed_at);
-							territoryGrid = cached.grid;
-							territoryBounds = cached.bounds || null;
-							loadingTerritories = false;
-							renderTerritoryGrid();
-							return;
-						} else if (cached.is_partial) {
-							// Partial cache - resume from it
-							console.log(`Resuming from partial cache (${cached.grid.length} points)`);
-							cachedResults = cached.grid;
-							resumeFromPartial = true;
-						}
-					}
-				} catch (e) {
-					console.log("No cached territories, computing from scratch...");
-				}
-			} else {
-				console.log("Force refresh - computing territories from scratch...");
-			}
-
-			// Compute dynamic bounds from contact locations + 50km padding
-			const bounds = computeBounds(mappableStandorte);
-			territoryBounds = bounds;
-			console.log(`Dynamic bounds: lat ${bounds.minLat.toFixed(2)}-${bounds.maxLat.toFixed(2)}, lng ${bounds.minLng.toFixed(2)}-${bounds.maxLng.toFixed(2)}`);
-
-			// Generate grid points within bounds
-			const allGridPoints: { lat: number; lng: number }[] = [];
-			for (let i = 0; i < GRID_SIZE; i++) {
-				for (let j = 0; j < GRID_SIZE; j++) {
-					allGridPoints.push({
-						lat: bounds.minLat + (i / (GRID_SIZE - 1)) * (bounds.maxLat - bounds.minLat),
-						lng: bounds.minLng + (j / (GRID_SIZE - 1)) * (bounds.maxLng - bounds.minLng),
-					});
-				}
-			}
-			// Filter to only points within 50km of any standort
-			const gridPoints = allGridPoints.filter((p) => isPointRelevant(p.lat, p.lng, mappableStandorte));
-			console.log(`Using ${gridPoints.length} grid points (filtered from ${allGridPoints.length})`);
-
-			// If resuming, filter out already computed points
-			let pointsToCompute = gridPoints;
-			if (resumeFromPartial && cachedResults.length > 0) {
-				const computedSet = new Set(cachedResults.map((p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`));
-				pointsToCompute = gridPoints.filter((p) => !computedSet.has(`${p.lat.toFixed(4)},${p.lng.toFixed(4)}`));
-				console.log(`${pointsToCompute.length} points remaining to compute`);
-			}
-
-			// Kontakt coordinates (reused in each batch)
-			const standortCoords = mappableStandorte.map((c) => `${c.longitude},${c.latitude}`);
-			const results: { lat: number; lng: number; contactIndex: number }[] = [...cachedResults];
-
-			// Process in batches
-			let batchCount = 0;
-			for (let batchStart = 0; batchStart < pointsToCompute.length; batchStart += BATCH_SIZE) {
-				const batchPoints = pointsToCompute.slice(batchStart, batchStart + BATCH_SIZE);
-
-				// Build OSRM request: batch grid points as sources, standorte as destinations
-				const batchCoords = [
-					...batchPoints.map((p) => `${p.lng},${p.lat}`),
-					...standortCoords,
-				].join(";");
-
-				const sources = batchPoints.map((_, i) => i).join(";");
-				const destinations = standortCoords.map((_, i) => batchPoints.length + i).join(";");
-
-				try {
-					const response = await fetch(
-						`https://router.project-osrm.org/table/v1/driving/${batchCoords}?sources=${sources}&destinations=${destinations}`
-					);
-					const data = await response.json();
-
-					if (data.code === "Ok") {
-						batchPoints.forEach((point, i) => {
-							const durations = data.durations[i];
-							let minIndex = 0;
-							let minTime = durations[0] ?? Infinity;
-
-							durations.forEach((time: number | null, j: number) => {
-								if (time !== null && time < minTime) {
-									minTime = time;
-									minIndex = j;
-								}
-							});
-
-							results.push({ ...point, contactIndex: minIndex });
-						});
-					}
-				} catch (e) {
-					console.error("OSRM batch failed:", e);
-				}
-
-				batchCount++;
-				loadingProgress = Math.round((results.length / gridPoints.length) * 100);
-
-				// Save intermediate results every 5 batches
-				if (batchCount % 5 === 0) {
-					try {
-						await saveTerritories(serviceId, {
-							grid: results,
-							locations_hash: locationsHash,
-							computed_at: null,
-							is_partial: true,
-							total_points: gridPoints.length,
-							bounds,
-						});
-						console.log(`Saved intermediate progress: ${results.length}/${gridPoints.length} points`);
-					} catch (e) {
-						// Ignore intermediate save errors
-					}
-				}
-
-				// Update display with partial results
-				territoryGrid = results;
+			// Load from backend cache (calculated daily at 4:00 AM by backend scheduler)
+			const cached = await getTerritories(serviceId);
+			if (cached.grid && cached.grid.length > 0 && cached.computed_at && !cached.is_partial) {
+				// Complete cache - use it with its stored bounds
+				console.log("Using cached territory data from", cached.computed_at);
+				territoryGrid = cached.grid;
+				territoryBounds = cached.bounds || null;
 				renderTerritoryGrid();
-
-				// Small delay between batches
-				await new Promise((r) => setTimeout(r, 100));
+			} else {
+				console.log("No cached territories available yet. Territories are calculated daily at 4:00 AM.");
 			}
-
-			territoryGrid = results;
-
-			// Save final results to backend cache
-			try {
-				await saveTerritories(serviceId, {
-					grid: results,
-					locations_hash: locationsHash,
-					computed_at: new Date().toISOString(),
-					is_partial: false,
-					total_points: gridPoints.length,
-					bounds,
-				});
-				console.log("Saved complete territory data to cache");
-			} catch (e) {
-				console.error("Failed to save territories to cache:", e);
-			}
-
-			renderTerritoryGrid();
+		} catch (e) {
+			console.log("No cached territories available yet:", e);
 		} finally {
 			loadingTerritories = false;
 			fetchInProgress = false;
@@ -314,14 +141,14 @@
 	}
 
 	function renderTerritoryGrid() {
-		if (!map || !leaflet || territoryGrid.length === 0) return;
+		if (!map || !leaflet || territoryGrid.length === 0 || !territoryBounds) return;
 
 		// Clear existing rectangles
 		territoryRects.forEach((r) => r.remove());
 		territoryRects = [];
 
-		// Use stored bounds (from computation or cache) to ensure cell sizing matches grid positions
-		const bounds = territoryBounds || computeBounds(mappableStandorte);
+		// Use stored bounds from cache
+		const bounds = territoryBounds;
 		const latStep = (bounds.maxLat - bounds.minLat) / (GRID_SIZE - 1);
 		const lngStep = (bounds.maxLng - bounds.minLng) / (GRID_SIZE - 1);
 
@@ -358,14 +185,14 @@
 	}
 
 	function renderTerritoryBorders() {
-		if (!map || !leaflet || territoryGrid.length === 0) return;
+		if (!map || !leaflet || territoryGrid.length === 0 || !territoryBounds) return;
 
 		// Clear existing borders
 		borderLines.forEach((l) => l.remove());
 		borderLines = [];
 
-		// Use stored bounds to match grid cell positions
-		const bounds = territoryBounds || computeBounds(mappableStandorte);
+		// Use stored bounds from cache
+		const bounds = territoryBounds;
 		const latStep = (bounds.maxLat - bounds.minLat) / (GRID_SIZE - 1);
 		const lngStep = (bounds.maxLng - bounds.minLng) / (GRID_SIZE - 1);
 
@@ -417,6 +244,80 @@
 		});
 	}
 
+	function calculateCallOpacity(timestamp: string): number {
+		// Parse timestamp (format: YYYYMMDD_HHMMSS)
+		const dateStr = timestamp.split('_')[0];
+		const year = parseInt(dateStr.substring(0, 4));
+		const month = parseInt(dateStr.substring(4, 6)) - 1;
+		const day = parseInt(dateStr.substring(6, 8));
+		const callDate = new Date(year, month, day);
+
+		const now = new Date();
+		const thirtyDaysAgo = new Date();
+		thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+		const totalRange = now.getTime() - thirtyDaysAgo.getTime();
+		const callAge = now.getTime() - callDate.getTime();
+
+		// Opacity from 0.2 (30 days ago) to 0.8 (today)
+		const normalizedAge = callAge / totalRange;
+		return 0.8 - (normalizedAge * 0.6);
+	}
+
+	function updateCallMarkers() {
+		if (!map || !leaflet) return;
+
+		// Clear existing call markers
+		callMarkers.forEach((m) => m.remove());
+		callMarkers = [];
+
+		// Add pulsating red markers for recent calls
+		recentCalls.forEach((call) => {
+			if (!map || !leaflet || !call.latitude || !call.longitude) return;
+
+			const opacity = calculateCallOpacity(call.timestamp);
+
+			// Create a custom div icon for pulsating effect
+			const icon = leaflet.divIcon({
+				className: 'call-marker-container',
+				html: `<div class="pulsating-call-marker" style="opacity: ${opacity};"></div>`,
+				iconSize: [20, 20],
+				iconAnchor: [10, 10]
+			});
+
+			const marker = leaflet.marker(
+				[call.latitude, call.longitude],
+				{ icon }
+			).addTo(map);
+
+			// Format location for popup
+			let locationStr = "Unbekannter Standort";
+			if (typeof call.location === 'object' && call.location.formatted_address) {
+				locationStr = String(call.location.formatted_address);
+			} else if (typeof call.location === 'string' && call.location.trim()) {
+				locationStr = call.location;
+			}
+
+			// Format date for popup
+			const dateStr = call.timestamp.split('_')[0];
+			const year = dateStr.substring(0, 4);
+			const month = dateStr.substring(4, 6);
+			const day = dateStr.substring(6, 8);
+			const formattedDate = `${day}.${month}.${year}`;
+
+			marker.bindPopup(
+				`<div style="min-width: 200px;">
+					<b style="color: #ef4444;">📞 Anruf</b><br>
+					<b>Datum:</b> ${formattedDate}<br>
+					<b>Standort:</b> ${locationStr}<br>
+					${call.intent ? `<b>Anliegen:</b> ${call.intent}<br>` : ''}
+				</div>`
+			);
+
+			callMarkers.push(marker);
+		});
+	}
+
 	function updateMarkers() {
 		if (!map || !leaflet) return;
 
@@ -442,16 +343,21 @@
 			markers.push(marker);
 		});
 
-		// Fit bounds if we have markers
-		if (markers.length > 0 && map && leaflet) {
-			const group = leaflet.featureGroup(markers);
+		// Add call markers
+		updateCallMarkers();
+
+		// Fit bounds to include both standorte and call markers
+		if ((markers.length > 0 || callMarkers.length > 0) && map && leaflet) {
+			const allMarkers = [...markers, ...callMarkers];
+			const group = leaflet.featureGroup(allMarkers);
 			map.fitBounds(group.getBounds().pad(0.1));
 		}
 	}
 
 	$effect(() => {
-		// Re-render markers and territories when standorte or serviceId change
+		// Re-render markers and territories when standorte, calls, or serviceId change
 		mappableStandorte;
+		recentCalls;
 		serviceId;
 		if (map && leaflet) {
 			// Clear existing territories
@@ -463,7 +369,7 @@
 			territoryBounds = null;
 
 			updateMarkers();
-			fetchDrivingTimeTerritories();
+			loadCachedTerritories();
 		}
 	});
 
@@ -471,6 +377,7 @@
 		territoryRects.forEach((r) => r.remove());
 		borderLines.forEach((l) => l.remove());
 		markers.forEach((m) => m.remove());
+		callMarkers.forEach((m) => m.remove());
 		map?.remove();
 	});
 </script>
@@ -482,8 +389,37 @@
 		<div class="absolute top-3 left-3 bg-white/95 px-4 py-2 rounded-lg shadow-lg z-[1000] flex items-center gap-3">
 			<div class="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
 			<span class="text-sm font-medium text-gray-700">
-				Lade Gebiete... {loadingProgress}%
+				Lade Gebiete...
 			</span>
 		</div>
 	{/if}
 </div>
+
+<style>
+	:global(.call-marker-container) {
+		background: transparent !important;
+		border: none !important;
+	}
+
+	:global(.pulsating-call-marker) {
+		width: 16px;
+		height: 16px;
+		background-color: #ef4444;
+		border: 2px solid #dc2626;
+		border-radius: 50%;
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		animation: pulse-call 2s ease-in-out infinite;
+	}
+
+	@keyframes pulse-call {
+		0%, 100% {
+			box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+		}
+		50% {
+			box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+		}
+	}
+</style>

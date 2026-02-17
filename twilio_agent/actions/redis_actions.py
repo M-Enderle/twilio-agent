@@ -72,7 +72,7 @@ def _set_hist_info(call_number: str, key: str, value: str) -> None:
     )
 
 
-def init_new_call(call_number: str):
+def init_new_call(call_number: str, service: str):
     starttime = datetime.datetime.now(tz).strftime("%Y%m%dT%H%M%S")
     redis.set(
         f"notdienststation:anrufe:{call_number}:gestartet_um",
@@ -81,25 +81,13 @@ def init_new_call(call_number: str):
     )
     _set_hist_info(call_number, "Startzeit", datetime.datetime.now(tz).isoformat())
     _set_hist_info(call_number, "Anrufnummer", call_number)
+    _set_hist_info(call_number, "Service", service)
     save_job_info(call_number, "Live", "Ja")
+    save_job_info(call_number, "Service", service)
 
 
-def get_intent(call_number: str, return_anonymou: bool = False) -> str:
-    try:
-        if call_number == "anonymous" and not return_anonymou:
-            return None
-        return redis.get(f"notdienststation:anrufe:{call_number}:anliegen").decode(
-            "utf-8"
-        )
-    except Exception as e:
-        return None
-
-
-def set_intent(call_number: str, intent: str):
-    redis.set(
-        f"notdienststation:anrufe:{call_number}:anliegen", intent, ex=persistance_time
-    )
-    _set_hist_info(call_number, "Anliegen", intent)
+def get_service(call_number: str) -> str | None:
+    return get_job_info(call_number, "Service")
 
 
 def agent_message(call_number: str, message: str):
@@ -197,7 +185,8 @@ def add_to_caller_queue(caller: str, name: str, phone: str):
         json.dumps(queue),
         ex=persistance_time,
     )
-    _set_hist_info(caller, "Warteschlange", [c["name"] for c in queue])
+    # Save full queue info (name and phone) to history for dashboard display
+    _set_hist_info(caller, "Warteschlange", queue)
 
 
 def get_next_caller_in_queue(caller: str) -> dict | None:
@@ -218,6 +207,8 @@ def delete_next_caller(caller: str):
         json.dumps(queue),
         ex=persistance_time,
     )
+    # Update history to reflect queue changes
+    _set_hist_info(caller, "Warteschlange", queue)
 
 
 def clear_caller_queue(caller: str):
@@ -234,7 +225,8 @@ def set_transferred_to(caller: str, transferred_to: str):
 
 
 def get_transferred_to(caller: str) -> str | None:
-    return redis.get(f"notdienststation:anrufe:{caller}:Weitergeleitet an")
+    result = redis.get(f"notdienststation:anrufe:{caller}:Weitergeleitet an")
+    return result.decode('utf-8') if result else None
 
 
 def save_job_info(caller: str, detail_name: str, detail_value: str):
@@ -392,3 +384,10 @@ def cleanup_call(call_number: str):
 
     for key in keys_to_delete:
         redis.delete(key)
+
+
+def set_transcription_text(call_number: str, transcription_text: str | None):
+    save_job_info(call_number, "Transkription", transcription_text or "")
+
+def get_transcription_text(call_number: str) -> str | None:
+    return get_job_info(call_number, "Transkription")

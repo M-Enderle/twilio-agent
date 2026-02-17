@@ -10,15 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from twilio_agent import configure_logging
-from twilio_agent.actions.location_sharing_actions import \
-    router as location_router
 from twilio_agent.api.dashboard import router as dashboard_router
+from twilio_agent.conversation_flow import router as conversation_router
+from twilio_agent.actions.location_sharing_actions import router as location_router
 from twilio_agent.actions.recording_actions import router as recording_router
-from twilio_agent.flow.address import router as address_router
-from twilio_agent.flow.call_entry import router as call_entry_router
-from twilio_agent.flow.management import router as management_router
-from twilio_agent.flow.sms_and_transfer import router as sms_router
 from twilio_agent.utils.eleven import cache_manager
+from twilio_agent.scheduler import start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +32,25 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length"],
     )
+
     application.include_router(dashboard_router, prefix="/api/dashboard")
-    application.include_router(call_entry_router)
-    application.include_router(address_router)
-    application.include_router(sms_router)
-    application.include_router(management_router)
-    application.include_router(recording_router)
+    application.include_router(conversation_router)
     application.include_router(location_router)
+    application.include_router(recording_router)
+
+    @application.on_event("startup")
+    async def startup_event():
+        """Start background scheduler when the application starts."""
+        logger.info("Starting background scheduler...")
+        start_scheduler()
+
+    @application.on_event("shutdown")
+    async def shutdown_event():
+        """Stop background scheduler when the application shuts down."""
+        logger.info("Stopping background scheduler...")
+        stop_scheduler()
 
     @application.get("/audio/{key}.mp3")
     async def get_audio(key: str):

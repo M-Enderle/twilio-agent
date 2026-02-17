@@ -39,22 +39,18 @@
 	// Form state
 	let name = $state("");
 	let address = $state("");
-	let zipcode = $state("");
 	let contacts = $state<StandortKontakt[]>([]);
 
 	// Original values to detect changes
 	let originalAddress = $state("");
-	let originalZipcode = $state("");
 
 	async function loadStandort() {
 		if (!standortId || isNew) {
 			// New location — reset form
 			name = "";
 			address = "";
-			zipcode = "";
 			contacts = [];
 			originalAddress = "";
-			originalZipcode = "";
 			standort = null;
 			return;
 		}
@@ -68,10 +64,8 @@
 				standort = found;
 				name = standort.name;
 				address = standort.address || "";
-				zipcode = String(standort.zipcode || "");
 				contacts = JSON.parse(JSON.stringify(standort.contacts || [])); // Deep copy
 				originalAddress = standort.address || "";
-				originalZipcode = String(standort.zipcode || "");
 			} else {
 				error = "Standort nicht gefunden";
 			}
@@ -125,28 +119,29 @@
 		error = "";
 
 		try {
-			// Re-geocode if address or zipcode changed, or if no coordinates yet
+			// Re-geocode if address changed, or if no coordinates yet
 			let latitude = standort?.latitude;
 			let longitude = standort?.longitude;
 
-			const geocodeQuery = [address, zipcode].filter(Boolean).join(", ");
-			const addressChanged = address !== originalAddress || zipcode !== originalZipcode;
+			const addressChanged = address !== originalAddress;
 			const hasCoords = latitude != null && longitude != null;
 
-			if ((addressChanged || !hasCoords) && geocodeQuery.length > 2) {
+			if ((addressChanged || !hasCoords) && address.trim().length > 2) {
 				try {
-					const geo = await geocodeAddress(geocodeQuery);
+					const geo = await geocodeAddress(address);
 					latitude = geo.latitude;
 					longitude = geo.longitude;
-				} catch {
-					// Geocoding failed, keep old coords
+				} catch (geoError) {
+					// Geocoding failed, show error to user
+					error = "Adresse konnte nicht gefunden werden. Bitte überprüfen Sie die Adresse.";
+					saving = false;
+					return;
 				}
 			}
 
 			const data = {
 				name,
 				address,
-				zipcode,
 				latitude,
 				longitude,
 				contacts,
@@ -243,15 +238,11 @@
 						<Input id="location-name" bind:value={name} placeholder="z.B. Firma XY" />
 					</div>
 					<div class="grid gap-2">
-						<Label for="location-address">Adresse (Optional)</Label>
-						<Input id="location-address" bind:value={address} placeholder="Straße, Ort" />
+						<Label for="location-address">Adresse</Label>
+						<Input id="location-address" bind:value={address} placeholder="Straße, PLZ Ort" />
 						<p class="text-xs text-muted-foreground">
 							Wird für die Routenberechnung und Karte verwendet
 						</p>
-					</div>
-					<div class="grid gap-2">
-						<Label for="location-zipcode">PLZ (Optional)</Label>
-						<Input id="location-zipcode" bind:value={zipcode} placeholder="87509" />
 					</div>
 				</div>
 

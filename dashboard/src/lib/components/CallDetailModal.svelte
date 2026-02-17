@@ -7,7 +7,7 @@
 	import InfoIcon from "@lucide/svelte/icons/info";
 	import MicIcon from "@lucide/svelte/icons/mic";
 	import MessageCircleIcon from "@lucide/svelte/icons/message-circle";
-	import { getCallDetail, fetchRecordingBlob } from "$lib/api";
+	import { getCallDetail, getRecordingUrl } from "$lib/api";
 	import { formatPhone } from "$lib/utils";
 	import type { CallDetail, CallMessage, RecordingInfo } from "$lib/types";
 
@@ -25,8 +25,8 @@
 
 	let detail = $state<CallDetail | null>(null);
 	let error = $state("");
-	let audioBlobUrls = $state<Record<string, string>>({});
-	let audioFetched = $state(false);
+	let audioUrls = $state<Record<string, string>>({});
+	let loadedRecordings = $state<Set<string>>(new Set());
 
 	const EXCLUDED_KEYS = new Set([
 		"call_number",
@@ -39,6 +39,7 @@
 		"Audioaufnahme",
 		"Audioaufnahme (Erstanruf)",
 		"Audioaufnahme (SMS Rückruf)",
+		"Warteschlange",
 	]);
 
 	async function loadDetail() {
@@ -51,26 +52,30 @@
 		}
 	}
 
-	async function loadAudio() {
-		if (!detail || audioFetched) return;
-		audioFetched = true;
-		const urls: Record<string, string> = {};
-		for (const [recType] of Object.entries(detail.recordings)) {
-			try {
-				urls[recType] = await fetchRecordingBlob(number, timestamp, recType);
-			} catch {
-				// skip unavailable recordings
-			}
+	function loadAudio() {
+		if (!detail) return;
+
+		// Only load recordings that haven't been loaded yet
+		const newRecordings = Object.keys(detail.recordings).filter(
+			recType => !loadedRecordings.has(recType)
+		);
+
+		if (newRecordings.length === 0) return;
+
+		// Create URLs only for new recordings
+		const newUrls: Record<string, string> = {};
+		for (const recType of newRecordings) {
+			newUrls[recType] = getRecordingUrl(number, timestamp, recType);
+			loadedRecordings.add(recType);
 		}
-		audioBlobUrls = urls;
+
+		// Merge new URLs with existing ones
+		audioUrls = { ...audioUrls, ...newUrls };
 	}
 
 	function cleanup() {
-		for (const url of Object.values(audioBlobUrls)) {
-			URL.revokeObjectURL(url);
-		}
-		audioBlobUrls = {};
-		audioFetched = false;
+		audioUrls = {};
+		loadedRecordings = new Set();
 		detail = null;
 	}
 
@@ -85,7 +90,7 @@
 	});
 
 	$effect(() => {
-		if (detail && Object.keys(detail.recordings).length > 0 && !audioFetched) {
+		if (detail && Object.keys(detail.recordings).length > 0) {
 			loadAudio();
 		}
 	});
@@ -111,6 +116,21 @@
 	const hangupReason = $derived(detail?.info?.hangup_reason ?? "");
 	const phone = $derived(detail?.info?.Telefonnummer ?? detail?.info?.Anrufnummer ?? number);
 
+	const queue = $derived.by(() => {
+		const queueData = detail?.info?.Warteschlange;
+		if (!queueData) return [];
+		// Handle both array of objects and array of strings (legacy)
+		if (Array.isArray(queueData)) {
+			return queueData.map((item, index) => {
+				if (typeof item === "string") {
+					return { name: item, phone: "", position: index + 1 };
+				}
+				return { ...item, position: index + 1 };
+			});
+		}
+		return [];
+	});
+
 	function formatValue(key: string, value: any): string {
 		if (key === "Startzeit" && value) {
 			try {
@@ -127,7 +147,7 @@
 				return String(value);
 			}
 		}
-		if (key === "Preis" && value) return `${value} \u20AC`;
+		if (key === "Preis" && value) return `${value}`;
 		if (key === "Wartezeit" && value) return `${value} Min`;
 		if (Array.isArray(value)) return value.join(", ");
 		if (value != null) return String(value);
@@ -207,7 +227,43 @@
 	}
 
 	function getRecordingLabel(recType: string): string {
-		return recType === "initial" ? "Erstanruf" : "SMS-Rückruf";
+		const labels: Record<string, string> = {
+			initial: "Erstanruf",
+			followup: "SMS-Rückruf",
+		};
+		return labels[recType] || recType;
+	}
+
+	function formatDuration(seconds: number): string {
+		const mins = Math.floor(seconds / 60);
+		const secs = seconds % 60;
+		if (mins > 0) {
+			return `${mins}:${secs.toString().padStart(2, "0")} min`;
+		}
+		return `${secs}s`;
+	}
+
+	async function downloadRecording(recType: string) {
+		const url = audioUrls[recType];
+		if (!url) return;
+
+		try {
+			const response = await fetch(url);
+			const blob = await response.blob();
+			const blobUrl = URL.createObjectURL(blob);
+
+			const a = document.createElement("a");
+			a.href = blobUrl;
+			a.download = `recording-${phone}-${recType}-${new Date().toISOString().split("T")[0]}.mp3`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+
+			// Clean up blob URL
+			setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+		} catch (err) {
+			console.error("Download failed:", err);
+		}
 	}
 
 </script>
@@ -320,30 +376,127 @@
 					</div>
 				{/if}
 
+				<!-- Contact Queue -->
+				{#if queue.length > 0}
+					<div>
+						<h3 class="text-xs sm:text-sm font-medium text-muted-foreground mb-2.5 sm:mb-3 flex items-center gap-2">
+							<svg class="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+							</svg>
+							Anrufwarteschlange
+						</h3>
+						<div class="space-y-2">
+							{#each queue as contact, index}
+								<div class="group relative rounded-lg border bg-gradient-to-r from-muted/40 to-muted/20 hover:from-muted/60 hover:to-muted/40 transition-all duration-200">
+									<div class="flex items-center gap-3 p-3 sm:p-3.5">
+										<!-- Position Badge -->
+										<div class="flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-primary/10 text-primary font-semibold text-xs sm:text-sm shrink-0 ring-2 ring-primary/20">
+											{contact.position}
+										</div>
+
+										<!-- Contact Info -->
+										<div class="flex-1 min-w-0">
+											<div class="flex items-center gap-2">
+												<p class="text-xs sm:text-sm font-semibold text-foreground truncate">
+													{contact.name || "Unbekannt"}
+												</p>
+												{#if index === 0}
+													<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 border border-green-200">
+														<svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
+															<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+														</svg>
+														Nächster
+													</span>
+												{/if}
+											</div>
+											{#if contact.phone}
+												<a
+													href="tel:{contact.phone}"
+													class="text-[11px] sm:text-xs text-muted-foreground hover:text-blue-600 transition-colors inline-flex items-center gap-1 mt-0.5"
+												>
+													<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+														<path stroke-linecap="round" stroke-linejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+													</svg>
+													{formatPhone(contact.phone)}
+												</a>
+											{/if}
+										</div>
+
+										<!-- Connection Arrow (except for last item) -->
+										{#if index < queue.length - 1}
+											<div class="absolute -bottom-2 left-1/2 -translate-x-1/2 z-10">
+												<svg class="w-4 h-4 text-muted-foreground/40" fill="currentColor" viewBox="0 0 20 20">
+													<path fill-rule="evenodd" d="M10 3a1 1 0 011 1v10.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 14.586V4a1 1 0 011-1z" clip-rule="evenodd" />
+												</svg>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
 				<!-- Audio Players -->
 				{#if Object.keys(detail.recordings).length > 0}
 					<div>
 						<h3 class="text-xs sm:text-sm font-medium text-muted-foreground mb-2.5 sm:mb-3 flex items-center gap-2">
 							<MicIcon class="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-							Aufnahmen
+							Aufnahmen ({Object.keys(detail.recordings).length})
 						</h3>
-						<div class="space-y-2.5">
-							{#each Object.entries(detail.recordings) as [recType, rec]}
-								<div class="rounded-lg border bg-muted/30 p-3 sm:p-4">
-									<div class="flex items-center justify-between mb-2">
-										<span class="text-xs sm:text-sm font-medium">{getRecordingLabel(recType)}</span>
-										{#if rec.metadata?.duration_total_seconds}
-											<span class="text-[11px] sm:text-xs text-muted-foreground">
-												{Math.round(rec.metadata.duration_total_seconds)}s
-											</span>
-										{/if}
+						<div class="space-y-2.5 sm:space-y-3">
+							{#each Object.entries(detail.recordings) as [recType, rec] (recType)}
+								<div class="rounded-lg border bg-gradient-to-br from-muted/40 to-muted/20 p-3 sm:p-4 hover:from-muted/60 hover:to-muted/30 transition-all duration-200">
+									<div class="flex items-center justify-between mb-2.5">
+										<div class="flex items-center gap-2">
+											<div class="flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary/10 shrink-0">
+												<svg class="w-3 h-3 sm:w-3.5 sm:h-3.5 text-primary" fill="currentColor" viewBox="0 0 20 20">
+													<path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clip-rule="evenodd" />
+												</svg>
+											</div>
+											<span class="text-xs sm:text-sm font-semibold">{getRecordingLabel(recType)}</span>
+										</div>
+										<div class="flex items-center gap-2">
+											{#if rec.metadata?.duration_total_seconds}
+												<span class="text-[10px] sm:text-xs text-muted-foreground font-medium px-2 py-0.5 rounded-full bg-muted/50">
+													{formatDuration(Math.round(rec.metadata.duration_total_seconds))}
+												</span>
+											{/if}
+											{#if audioUrls[recType]}
+												<button
+													onclick={() => downloadRecording(recType)}
+													class="p-1.5 rounded-full hover:bg-muted transition-colors"
+													title="Aufnahme herunterladen"
+												>
+													<svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+														<path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+													</svg>
+												</button>
+											{/if}
+										</div>
 									</div>
-									{#if audioBlobUrls[recType]}
-										<audio controls class="w-full h-9" src={audioBlobUrls[recType]}>
+
+									<!-- Simple Audio Player -->
+									{#if audioUrls[recType]}
+										<audio
+											controls
+											preload="metadata"
+											class="w-full h-10 sm:h-12 rounded-lg"
+											src={audioUrls[recType]}
+										>
 											<track kind="captions" />
 										</audio>
 									{:else}
-										<Skeleton class="h-9 w-full" />
+										<Skeleton class="h-10 sm:h-12 w-full rounded-lg" />
+									{/if}
+
+									{#if rec.metadata?.bytes_total}
+										<div class="flex items-center gap-1 mt-2 text-[10px] sm:text-xs text-muted-foreground">
+											<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+												<path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+											</svg>
+											<span>{(rec.metadata.bytes_total / 1024).toFixed(1)} KB</span>
+										</div>
 									{/if}
 								</div>
 							{/each}

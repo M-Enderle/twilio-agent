@@ -133,14 +133,82 @@ def _build_recording_response(number: str, timestamp: str, recording_type: str):
     )
     if not audio_bytes:
         raise HTTPException(status_code=404, detail="Recording not found")
-    return Response(content=audio_bytes, media_type=content_type)
+
+    # Add headers needed for audio playback in browsers
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(len(audio_bytes)),
+        "Cache-Control": "public, max-age=3600",
+        "Access-Control-Allow-Origin": "*",
+    }
+
+    return Response(
+        content=audio_bytes,
+        media_type=content_type,
+        headers=headers
+    )
+
+
+def _build_recording_response_with_range(number: str, timestamp: str, recording_type: str, request: Request):
+    """Build response with support for HTTP range requests (needed for audio seeking)."""
+    audio_bytes, content_type = get_call_recording_binary(
+        number, timestamp, recording_type
+    )
+    if not audio_bytes:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    file_size = len(audio_bytes)
+    range_header = request.headers.get("range")
+
+    # Handle range requests
+    if range_header:
+        # Parse range header (e.g., "bytes=0-1023")
+        range_match = range_header.replace("bytes=", "").split("-")
+        start = int(range_match[0]) if range_match[0] else 0
+        end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+
+        # Ensure valid range
+        start = max(0, min(start, file_size - 1))
+        end = max(start, min(end, file_size - 1))
+
+        chunk = audio_bytes[start : end + 1]
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(chunk)),
+            "Cache-Control": "public, max-age=3600",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length",
+        }
+
+        return Response(
+            content=chunk,
+            status_code=206,  # Partial Content
+            media_type=content_type,
+            headers=headers
+        )
+
+    # Full file response
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(file_size),
+        "Cache-Control": "public, max-age=3600",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length",
+    }
+
+    return Response(
+        content=audio_bytes,
+        media_type=content_type,
+        headers=headers
+    )
 
 
 @router.get("/recordings/{number}/{timestamp}")
-async def fetch_initial_recording(number: str, timestamp: str):
-    return _build_recording_response(number, timestamp, "initial")
+async def fetch_initial_recording(number: str, timestamp: str, request: Request):
+    return _build_recording_response_with_range(number, timestamp, "initial", request)
 
 
 @router.get("/recordings/link/{number}/{timestamp}")
-async def fetch_followup_recording(number: str, timestamp: str):
-    return _build_recording_response(number, timestamp, "followup")
+async def fetch_followup_recording(number: str, timestamp: str, request: Request):
+    return _build_recording_response_with_range(number, timestamp, "followup", request)

@@ -7,7 +7,7 @@ import uuid
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -21,6 +21,7 @@ from twilio_agent.settings import (
     ActiveHours,
     Pricing,
     Announcements,
+    TransferSettings,
     Location,
     LocationContact,
 )
@@ -213,6 +214,21 @@ async def update_announcements(service_id: str, body: Announcements):
     return body
 
 
+# ── Transfer Settings (/services/{service_id}/settings/transfer) ─
+
+@router.get("/services/{service_id}/settings/transfer")
+async def get_transfer_settings(service_id: str):
+    _validate_service(service_id)
+    return settings.service(service_id).transfer_settings
+
+
+@router.put("/services/{service_id}/settings/transfer")
+async def update_transfer_settings(service_id: str, body: TransferSettings):
+    _validate_service(service_id)
+    settings.service(service_id).transfer_settings = body
+    return body
+
+
 # ── Status (global) ───────────────────────────────────────────────
 
 @router.get("/status")
@@ -233,7 +249,7 @@ async def system_status():
 
 @router.post("/geocode")
 async def geocode_address(body: GeocodeRequest):
-    result = get_geocode_result(body.address)
+    result = await get_geocode_result(body.address)
     if not result:
         raise HTTPException(status_code=404, detail="Could not geocode address")
     return {
@@ -311,6 +327,19 @@ async def save_territories(service_id: str, body: TerritoryData):
         return {"status": "saved", "grid_size": len(body.grid)}
 
 
+@router.post("/services/{service_id}/territories/recalculate")
+async def recalculate_territories(service_id: str):
+    """Manually trigger territory calculation for a service (for testing/debugging)."""
+    from twilio_agent.scheduler import calculate_service_territories
+    _validate_service(service_id)
+
+    # Trigger calculation in background
+    import asyncio
+    asyncio.create_task(calculate_service_territories(service_id))
+
+    return {"status": "calculation_started", "service_id": service_id}
+
+
 # ── Calls (/calls) ───────────────────────────────────────────────
 
 def _parse_info_yaml(raw_bytes: bytes) -> dict:
@@ -327,8 +356,8 @@ def _parse_info_yaml(raw_bytes: bytes) -> dict:
 
 
 @router.get("/calls")
-async def list_calls():
-    """List all calls from Redis using SCAN."""
+async def list_calls(service: Optional[str] = None):
+    """List all calls from Redis using SCAN, optionally filtered by service."""
     calls = []
     cursor = 0
     pattern = "notdienststation:verlauf:*:info"
@@ -353,6 +382,13 @@ async def list_calls():
             except Exception:
                 continue
 
+            # Get service from call info
+            call_service = info.get("Service", "")
+
+            # Filter by service if specified
+            if service and call_service != service:
+                continue
+
             raw_live = info.get("Live", False)
             is_live = raw_live is True or str(raw_live).lower() in ("ja", "true", "yes")
 
@@ -363,6 +399,14 @@ async def list_calls():
                 if not redis.exists(active_key):
                     is_live = False
 
+            # Extract lat/lng from location dict
+            location_data = info.get("Standort", "")
+            latitude = None
+            longitude = None
+            if isinstance(location_data, dict):
+                latitude = location_data.get("latitude")
+                longitude = location_data.get("longitude")
+
             calls.append({
                 "number": number,
                 "timestamp": timestamp,
@@ -370,11 +414,14 @@ async def list_calls():
                 "start_time": info.get("Startzeit", ""),
                 "intent": info.get("Anliegen", ""),
                 "live": is_live,
-                "location": info.get("Standort", ""),
+                "location": location_data,
+                "latitude": latitude,
+                "longitude": longitude,
                 "provider": info.get("Anbieter", ""),
                 "price": info.get("Preis", ""),
                 "hangup_reason": info.get("hangup_reason", ""),
                 "transferred_to": info.get("Weitergeleitet an", ""),
+                "service": call_service,
             })
 
         if cursor == 0:
@@ -443,11 +490,55 @@ async def get_call_detail(number: str, timestamp: str):
 
 
 @router.get("/calls/{number}/{timestamp}/recording/{recording_type}")
-async def get_call_recording(number: str, timestamp: str, recording_type: str):
-    """Proxy audio binary through authenticated endpoint."""
+async def get_call_recording(
+    number: str, timestamp: str, recording_type: str, request: Request
+):
+    """Proxy audio binary through authenticated endpoint with range request support."""
     audio_bytes, content_type = get_call_recording_binary(
         number, timestamp, recording_type
     )
     if not audio_bytes:
         raise HTTPException(status_code=404, detail="Recording not found")
-    return Response(content=audio_bytes, media_type=content_type)
+
+    file_size = len(audio_bytes)
+    range_header = request.headers.get("range")
+
+    # If no range header, return full file with Accept-Ranges header
+    if not range_header:
+        return Response(
+            content=audio_bytes,
+            media_type=content_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+            },
+        )
+
+    # Parse range header (format: "bytes=start-end")
+    try:
+        range_str = range_header.replace("bytes=", "")
+        range_parts = range_str.split("-")
+        start = int(range_parts[0]) if range_parts[0] else 0
+        end = int(range_parts[1]) if len(range_parts) > 1 and range_parts[1] else file_size - 1
+
+        # Validate range
+        if start >= file_size or end >= file_size or start > end:
+            raise HTTPException(status_code=416, detail="Range Not Satisfiable")
+
+        # Extract the requested byte range
+        chunk = audio_bytes[start : end + 1]
+        chunk_size = len(chunk)
+
+        # Return 206 Partial Content with appropriate headers
+        return Response(
+            content=chunk,
+            status_code=206,
+            media_type=content_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_size),
+            },
+        )
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="Invalid Range header")

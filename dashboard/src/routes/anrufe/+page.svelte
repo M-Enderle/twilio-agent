@@ -11,6 +11,7 @@
 	import PhoneIcon from "@lucide/svelte/icons/phone";
 	import PhoneForwardedIcon from "@lucide/svelte/icons/phone-forwarded";
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+	import { getSelectedService, getServiceVersion } from "$lib/service.svelte";
 
 	let calls = $state<CallSummary[]>([]);
 	let loading = $state(true);
@@ -25,7 +26,8 @@
 
 	async function loadCalls() {
 		try {
-			const result = await getCalls();
+			const selectedService = getSelectedService();
+			const result = await getCalls(selectedService);
 			calls = result.calls;
 			error = "";
 			consecutiveErrors = 0;
@@ -38,6 +40,8 @@
 	}
 
 	$effect(() => {
+		// Reload calls when service changes
+		const serviceVersion = getServiceVersion();
 		loadCalls();
 		const interval = setInterval(() => {
 			if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) return;

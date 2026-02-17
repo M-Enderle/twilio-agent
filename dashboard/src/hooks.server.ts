@@ -35,6 +35,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 			"style-src 'self' 'unsafe-inline'",
 			"img-src 'self' data: https://*.tile.openstreetmap.org https://notdienststation.de",
 			`connect-src ${connectSources.join(" ")}`,
+			`media-src ${connectSources.join(" ")}`,
 			"font-src 'self'",
 			"frame-ancestors 'none'",
 		].join("; ")

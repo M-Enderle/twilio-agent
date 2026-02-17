@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { ActiveHoursConfig, PhoneNumber, EmergencyContact, DirectForwarding } from "$lib/types";
+	import type { ActiveHoursConfig, PhoneNumber, EmergencyContact, DirectForwarding, TransferSettings } from "$lib/types";
 	import { SERVICES } from "$lib/types";
-	import { getActiveHours, getPhoneNumber, updatePhoneNumber, getEmergencyContact, updateEmergencyContact, getDirectForwarding, updateDirectForwarding } from "$lib/api";
+	import { getActiveHours, getPhoneNumber, updatePhoneNumber, getEmergencyContact, updateEmergencyContact, getDirectForwarding, updateDirectForwarding, getTransferSettings, updateTransferSettings } from "$lib/api";
 	import { getSelectedService, getServiceVersion } from "$lib/service.svelte";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
@@ -16,16 +16,19 @@
 	import LoaderIcon from "@lucide/svelte/icons/loader";
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import ForwardIcon from "@lucide/svelte/icons/forward";
+	import TimerIcon from "@lucide/svelte/icons/timer";
 	import { isValidE164 } from "$lib/utils";
 
 	let config = $state<ActiveHoursConfig>({ day_start: 7, day_end: 20, twenty_four_seven: false });
 	let phoneNumber = $state<PhoneNumber>({ phone_number: "" });
 	let emergencyContact = $state<EmergencyContact>({ name: "", phone: "" });
 	let directForwarding = $state<DirectForwarding>({ active: false, forward_phone: "", start_hour: 0, end_hour: 6 });
+	let transferSettings = $state<TransferSettings>({ ring_timeout: 15 });
 	let loading = $state(true);
 	let savingPhone = $state(false);
 	let savingEmergency = $state(false);
 	let savingForwarding = $state(false);
+	let savingTransfer = $state(false);
 	let error = $state("");
 	let success = $state("");
 
@@ -35,16 +38,18 @@
 	async function load() {
 		loading = true;
 		try {
-			const [hours, phone, emergency, forwarding] = await Promise.all([
+			const [hours, phone, emergency, forwarding, transfer] = await Promise.all([
 				getActiveHours(serviceId),
 				getPhoneNumber(serviceId),
 				getEmergencyContact(serviceId),
-				getDirectForwarding(serviceId)
+				getDirectForwarding(serviceId),
+				getTransferSettings(serviceId)
 			]);
 			config = hours;
 			phoneNumber = phone;
 			emergencyContact = emergency;
 			directForwarding = forwarding;
+			transferSettings = transfer;
 			error = "";
 		} catch (e) {
 			error = e instanceof Error ? e.message : "Ein unbekannter Fehler ist aufgetreten.";
@@ -105,6 +110,21 @@
 			error = e instanceof Error ? e.message : "Speichern fehlgeschlagen.";
 		} finally {
 			savingForwarding = false;
+		}
+	}
+
+	async function saveTransfer() {
+		savingTransfer = true;
+		success = "";
+		error = "";
+		try {
+			await updateTransferSettings(serviceId, transferSettings);
+			success = "Weiterleitungseinstellungen gespeichert";
+			setTimeout(() => { success = ""; }, 3000);
+		} catch (e) {
+			error = e instanceof Error ? e.message : "Speichern fehlgeschlagen.";
+		} finally {
+			savingTransfer = false;
 		}
 	}
 
@@ -280,6 +300,51 @@
 						{:else}
 							<CheckIcon class="h-4 w-4 mr-2" />
 							Weiterleitung speichern
+						{/if}
+					</Button>
+				</Card.Footer>
+			</Card.Root>
+
+			<!-- Transfer Settings -->
+			<Card.Root>
+				<Card.Header>
+					<div class="flex items-center gap-3">
+						<div class="p-2 rounded-lg bg-slate-100">
+							<TimerIcon class="h-5 w-5 text-slate-600" />
+						</div>
+						<div>
+							<Card.Title>Weiterleitungseinstellungen</Card.Title>
+							<Card.Description>Klingeldauer bei Anrufweiterleitung</Card.Description>
+						</div>
+					</div>
+				</Card.Header>
+				<Card.Content>
+					<div class="grid gap-2">
+						<Label for="ring_timeout" class="flex items-center gap-2">
+							<TimerIcon class="h-4 w-4 text-muted-foreground" />
+							Klingeldauer (Sekunden)
+						</Label>
+						<Input
+							id="ring_timeout"
+							type="number"
+							min="5"
+							max="60"
+							bind:value={transferSettings.ring_timeout}
+							placeholder="15"
+						/>
+						<p class="text-xs text-muted-foreground">
+							Wie lange soll der Kontakt klingeln bevor der nächste versucht wird? (5-60 Sekunden)
+						</p>
+					</div>
+				</Card.Content>
+				<Card.Footer>
+					<Button onclick={saveTransfer} disabled={savingTransfer} class="w-full">
+						{#if savingTransfer}
+							<LoaderIcon class="h-4 w-4 mr-2 animate-spin" />
+							Speichern...
+						{:else}
+							<CheckIcon class="h-4 w-4 mr-2" />
+							Einstellungen speichern
 						{/if}
 					</Button>
 				</Card.Footer>

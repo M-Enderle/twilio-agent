@@ -1,177 +1,89 @@
-"""Address collection and confirmation steps of the call flow."""
-
 import asyncio
-import logging
-import os
-import re
-import threading
-
-from fastapi import APIRouter, Request
+import time
+from fastapi import Request
 from num2words import num2words
-from twilio.twiml.voice_response import Gather, Record, Redirect
-
-from twilio_agent.actions.redis_actions import (ai_message, get_intent,
-                                                google_message)
-from twilio_agent.actions.redis_actions import redis as redis_client
-from twilio_agent.actions.redis_actions import (save_job_info, save_location,
-                                                user_message)
-from twilio_agent.actions.twilio_actions import new_response, say
-from twilio_agent.flow.management import (add_locksmith_contacts,
-                                          add_towing_contacts)
-from twilio_agent.flow.shared import (get_caller_number, narrate,
-                                      send_twilio_response,
-                                      transfer_with_message)
-from twilio_agent.flow.sms_and_transfer import (ask_send_sms_unified,
-                                                calculate_cost_unified)
-from twilio_agent.utils.ai import process_location, yes_no_question
+from twilio_agent.settings import settings, HumanAgentRequested
+from twilio_agent.actions.twilio_actions import immediate_human_transfer, new_response, send_request, say
+from twilio_agent.actions.redis_actions import (
+    agent_message, get_service, get_transcription_text, save_job_info,
+    save_location, user_message, ai_message, google_message
+)
+from twilio.twiml.voice_response import Record, Gather
+from twilio_agent.utils.ai import process_location, yes_no_question, correct_plz
+from twilio_agent.utils.location_utils import get_geocode_result, get_plz_from_coordinates
+from twilio_agent.utils.utils import call_info
 from twilio_agent.utils.eleven import transcribe_speech
-from twilio_agent.utils.location_utils import get_geocode_result
+import threading
+from logging import getLogger
 
-logger = logging.getLogger(__name__)
+logger = getLogger("AddressFlow")
 
-router = APIRouter()
-server_url = os.environ["SERVER_URL"]
-
-TRANSCRIPTION_KEY_SUFFIX = "address_transcription"
-TRANSCRIPTION_RESULT_TTL = 120
-TRANSCRIPTION_POLL_INTERVAL = 0.2
-TRANSCRIPTION_POLL_TIMEOUT = 8.0
-TRANSCRIPTION_ERROR_VALUE = "__TRANSCRIPTION_ERROR__"
-TWILIO_RECORDING_ACCOUNT = "AC57026df7ad4ab96c1b6387a4bf2221a4"
-CITY_ADDON_KEY_SUFFIX = "address_city_addon"
-CITY_ADDON_TTL = 300
-
-
-def _build_recording_url(recording_id: str) -> str:
-    return (
-        f"https://api.twilio.com/2010-04-01/Accounts/"
-        f"{TWILIO_RECORDING_ACCOUNT}/Recordings/{recording_id}"
-    )
-
-
-def _transcription_key(caller_number: str) -> str:
-    return f"notdienststation:anrufe:{caller_number}:{TRANSCRIPTION_KEY_SUFFIX}"
-
-
-async def address_query_unified(request: Request):
-    """Ask the caller to share their location once the intent is known."""
-    caller_number = await get_caller_number(request)
-    intent = get_intent(caller_number, True)
-
-    if intent == "abschleppdienst":
-        await add_towing_contacts(request)
-    elif intent == "schlüsseldienst":
-        await add_locksmith_contacts(request)
+async def ask_address_handler(request: Request) -> str:
+    """Ask the caller for their address."""
+    caller_number, called_number, form_data = await call_info(request)
+    service = get_service(caller_number)
 
     with new_response() as response:
-        narrate(
-            response,
-            caller_number,
-            "Nenne mir bitte deine Adresse mit Straße, Hausnummer und Wohnort.",
-        )
+        say(response, settings.service(service).announcements.address_request)
+        agent_message(caller_number, settings.service(service).announcements.address_request)
         response.append(
             Record(
-                action="/parse-address-recording/",
-                timeout=5,
+                action="/process-address",
+                timeout=4,
                 playBeep=False,
                 maxLength=10,
             )
         )
-        return await send_twilio_response(request, response)
+        return send_request(request, response)
 
+async def process_address_handler(request: Request) -> str:
+    """Process the address provided by the caller."""
+    caller_number, called_number, form_data = await call_info(request)
+    service = get_service(caller_number)
 
-@router.api_route("/parse-address-recording/", methods=["GET", "POST"])
-async def parse_address_recording(request: Request):
-    """Transcribe the recorded address and resolve it via Google Maps."""
-    caller_number = await get_caller_number(request)
-    form_data = await request.form()
-    recording_url = form_data.get("RecordingUrl", "")
+    recording_url = form_data.get("RecordingUrl")
+
+    # No recording provided
     if not recording_url:
-        return await ask_plz_unified(request)
+        logger.warning(f"No recording provided for caller {caller_number}, redirecting to PLZ")
+        with new_response() as response:
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
+
+    # process recording 
     recording_id = recording_url.rstrip("/").split("/")[-1]
-    if caller_number and recording_id:
 
-        def worker() -> None:
-            cache_value = TRANSCRIPTION_ERROR_VALUE
-            try:
-                speech_result, _ = transcribe_speech(_build_recording_url(recording_id))
-                cache_value = speech_result or ""
-            except Exception:  # noqa: BLE001 - logging and falling back downstream
-                logger.exception("Failed to transcribe address for %s", caller_number)
-            try:
-                redis_client.set(
-                    _transcription_key(caller_number),
-                    cache_value,
-                    ex=TRANSCRIPTION_RESULT_TTL,
-                )
-            except Exception:  # noqa: BLE001 - fallback handled later
-                logger.exception(
-                    "Failed to cache address transcription for %s", caller_number
-                )
+    # process in background process 
+    threading.Thread(target=transcribe_speech, args=(recording_id, caller_number)).start()
 
-        thread_name = f"addr-transcribe-{caller_number.replace('+', 'p')}"
-        threading.Thread(target=worker, name=thread_name, daemon=True).start()
     with new_response() as response:
-        narrate(response, caller_number, "Einen Moment, ich prüfe deine Eingabe.")
-        redirect = Redirect(f"{server_url}/parse-address-recording-2/{recording_id}")
-        response.append(redirect)
-        return await send_twilio_response(request, response)
+        say(response, settings.service(service).announcements.address_processing)
+        agent_message(caller_number, settings.service(service).announcements.address_processing)
+        response.redirect(f"{settings.env.SERVER_URL}/address-processed")
+        return send_request(request, response)
+    
 
-
-@router.api_route("/parse-address-recording-2/{recording_id}", methods=["GET", "POST"])
-async def parse_address_recording_2(request: Request, recording_id: str):
-    """Transcribe the recorded address and resolve it via Google Maps."""
-    caller_number = await get_caller_number(request)
-    if not recording_id:
-        save_job_info(caller_number, "Adresse unbekannt", "Ja")
-        return await ask_send_sms_unified(request)
-
-    if not caller_number:
-        speech_result = None
+async def address_processed_handler(request: Request) -> str:
+    """Handle the case when the address has been processed."""
+    caller_number, called_number, form_data = await call_info(request)
+    service = get_service(caller_number)
+    
+    # wait up to 3 seconds for the transcription to be available
+    for _ in range (30):
+        transcription = get_transcription_text(caller_number)
+        if transcription:
+            break
+        time.sleep(0.1)
     else:
-        key = _transcription_key(caller_number)
-        elapsed = 0.0
-        speech_result = None
-        while elapsed < TRANSCRIPTION_POLL_TIMEOUT:
-            try:
-                cached = redis_client.get(key)
-            except Exception:  # noqa: BLE001 - break to fall back to direct call
-                logger.exception(
-                    "Failed to read cached address transcription for %s", caller_number
-                )
-                break
-            if cached is not None:
-                try:
-                    redis_client.delete(key)
-                except Exception:  # noqa: BLE001 - non-critical clean-up failure
-                    logger.exception(
-                        "Failed to clear cached address transcription for %s",
-                        caller_number,
-                    )
-                decoded = (
-                    cached.decode("utf-8") if isinstance(cached, bytes) else cached
-                )
-                if decoded == TRANSCRIPTION_ERROR_VALUE:
-                    speech_result = None
-                else:
-                    speech_result = decoded
-                break
-            await asyncio.sleep(TRANSCRIPTION_POLL_INTERVAL)
-            elapsed += TRANSCRIPTION_POLL_INTERVAL
-        if speech_result is None:
-            try:
-                redis_client.delete(key)
-            except Exception:  # noqa: BLE001 - non-critical clean-up failure
-                logger.exception(
-                    "Failed to clear stale address transcription key for %s",
-                    caller_number,
-                )
-    if speech_result is None:
-        speech_result, _ = transcribe_speech(_build_recording_url(recording_id))
-    speech_result = (speech_result or "").strip()
+        logger.warning(f"Transcription timeout for caller {caller_number}, redirecting to PLZ")
+        with new_response() as response:
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
 
-    user_message(caller_number, speech_result)
+    user_message(caller_number, transcription)
+    logger.info(f"Transcription for caller {caller_number}: {transcription}")
 
+    # Extract location from transcription using AI
     try:
         (
             contains_loc,
@@ -180,11 +92,24 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             extracted_address,
             duration,
             model_source,
-        ) = await asyncio.wait_for(process_location(speech_result), timeout=6.0)
+        ) = await asyncio.wait_for(process_location(transcription), timeout=6.0)
     except asyncio.TimeoutError:
         ai_message(caller_number, "<Request timed out>", 6.0)
-        return await transfer_with_message(request)
+        logger.warning(f"Location processing timeout for caller {caller_number}, redirecting to PLZ")
+        with new_response() as response:
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
+    except HumanAgentRequested:
+        logger.info(f"Caller {caller_number} requested a human agent during address processing.")
+        ai_message(caller_number, "<User requested human agent>", 0.0)
+        return await immediate_human_transfer(request, caller_number, service)
 
+    logger.info(
+        f"Location processing completed in {duration:.2f} seconds.\n Extracted address: {extracted_address}\n"
+        f"Contains location: {contains_loc}, Contains city: {contains_city_bool}, Knows address: {knows_adress}, Model source: {model_source}"
+    )
+
+    # Handle the case where no location was found in the transcription
     if knows_adress is not None and not knows_adress:
         ai_message(
             caller_number,
@@ -192,8 +117,12 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             duration,
             model_source,
         )
-        return await ask_send_sms_unified(request)
+        logger.info(f"Caller {caller_number} does not know address, redirecting to SMS offer")
+        with new_response() as response:
+            response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
+            return send_request(request, response)
 
+    # Handle the case where a location was found but could not be extracted
     if not contains_loc or not contains_city_bool:
         ai_message(
             caller_number,
@@ -201,7 +130,10 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             duration,
             model_source,
         )
-        return await ask_plz_unified(request)
+        logger.info(f"Location extraction failed for caller {caller_number}, redirecting to PLZ")
+        with new_response() as response:
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
 
     ai_message(
         caller_number,
@@ -210,8 +142,9 @@ async def parse_address_recording_2(request: Request, recording_id: str):
         model_source,
     )
 
+    # try to extract a real location
     try:
-        location = get_geocode_result(extracted_address)
+        location = await get_geocode_result(extracted_address)
     except Exception as exc:
         logger.error("Error getting geocode result: %s", exc)
         location = None
@@ -221,175 +154,124 @@ async def parse_address_recording_2(request: Request, recording_id: str):
             caller_number,
             f"Google Maps konnte die Adresse '{extracted_address}' nicht eindeutig finden.",
         )
-        return await ask_plz_unified(request)
+        logger.info(f"Geocoding failed for caller {caller_number}, redirecting to PLZ")
+        with new_response() as response:
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
 
     parsed_location = extracted_address
     save_job_info(caller_number, "Adresse erkannt", parsed_location)
-    google_message(caller_number, f"Erkannte Adresse: {parsed_location}")
 
     if not parsed_location:
-        return await ask_plz_unified(request)
-
-    location = get_geocode_result(parsed_location)
-    if location and (location.plz or location.ort):
-        location_dict = location._asdict()
-        location_dict["zipcode"] = location.plz
-        location_dict["place"] = location.ort
-        save_location(caller_number, location_dict)
-
-        google_message(
-            caller_number,
-            f"Google Maps Ergebnis: {location.formatted_address} ({location.google_maps_link})",
-        )
-
-        place_phrase = (
-            " ".join(
-                filter(
-                    None,
-                    [
-                        " ".join(
-                            num2words(int(d), lang="de")
-                            for d in str(location.plz or "")
-                            if d.isdigit()
-                        ).strip(),
-                        location.ort,
-                    ],
-                )
-            ).strip()
-            or location.formatted_address
-        )
-
+        logger.info(f"No valid address parsed for caller {caller_number}, redirecting to PLZ")
         with new_response() as response:
-            narrate(
-                response,
-                caller_number,
-                f"Als Ort habe ich {place_phrase} erkannt. Ist das richtig?",
-            )
-            gather_kwargs = dict(
-                input="speech",
-                language="de-DE",
-                action="/parse-location-correct-unified",
-                speechTimeout="auto",
-                timeout=5,
-                enhanced=True,
-                model="experimental_conversations",
-            )
-            gather = Gather(**gather_kwargs)
-            response.append(gather)
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
 
-            say(
-                response,
-                "Bitte bestätige mit ja oder nein, ob die Adresse korrekt ist.",
-            )
-            gather2 = Gather(**gather_kwargs)
-            response.append(gather2)
+    # Resolve a full 5-digit PLZ if Google returned an incomplete one
+    resolved_plz = location.plz if (location.plz and len(str(location.plz).strip()) == 5) else None
+    if not resolved_plz:
+        # Try reverse geocoding ~100m to the east
+        shifted_lon = location.longitude + 0.00134
+        resolved_plz = await get_plz_from_coordinates(location.latitude, shifted_lon)
+        if resolved_plz:
+            logger.info(f"Resolved PLZ via coordinate shift: {resolved_plz}")
+    if not resolved_plz:
+        # Fall back to AI-based PLZ correction
+        resolved_plz = await correct_plz(extracted_address or location.ort or "", location.latitude, location.longitude)
+        if resolved_plz:
+            logger.info(f"Resolved PLZ via AI correction: {resolved_plz}")
 
-            return await send_twilio_response(request, response)
+    location_dict = location._asdict()
+    location_dict["zipcode"] = resolved_plz or location.plz
+    location_dict["place"] = location.ort
+    save_location(caller_number, location_dict)
 
     google_message(
         caller_number,
-        f"Google Maps konnte die Adresse '{parsed_location}' nicht eindeutig finden.",
+        f"Google Maps Ergebnis: {location.formatted_address} ({location.google_maps_link})",
     )
-    return await ask_plz_unified(request)
 
+    # Convert postal code digits to German words (e.g., "87509" -> "acht sieben fünf null neun")
+    plz_spoken = ""
+    if resolved_plz:
+        plz_digits = [num2words(int(d), lang="de") for d in str(resolved_plz) if d.isdigit()]
+        plz_spoken = " ".join(plz_digits)
 
-async def ask_plz_unified(request: Request):
-    """Prompt the caller to share their postal code via DTMF or speech."""
-    caller_number = await get_caller_number(request)
+    # Combine postal code and place name, fallback to formatted address
+    parts = [plz_spoken, location.ort]
+    place_phrase = " ".join(filter(None, parts)) or location.formatted_address
 
     with new_response() as response:
-        message = "Bitte gib die Postleitzahl deines Ortes über den Nummernblock ein."
-
-        gather = Gather(
-            input="dtmf speech",
-            action="/parse-plz-unified",
-            timeout=10,
-            numDigits=5,
-            model="experimental_utterances",
-            language="de-DE",
-            speechTimeout="auto",
-        )
-        narrate(response, caller_number, message)
-        response.append(gather)
-
-    return await send_twilio_response(request, response)
-
-
-@router.api_route("/parse-plz-unified", methods=["GET", "POST"])
-async def parse_plz_unified(request: Request):
-    """Handle the postal-code input and resolve it to a location."""
-    caller_number = await get_caller_number(request)
-    form_data = await request.form()
-    digits = form_data.get("Digits", "")
-    speech = form_data.get("SpeechResult", "")
-
-    if digits:
-        result = str(digits)
-        logger.info("Digits: %s", result)
-    elif speech:
-        result = str(speech)
-        re_identifier = r"(?<=\b\d\b)\s+(?=\b\d\b)"
-        result = re.sub(re_identifier, "", result)
-        logger.info("Speech: %s", result)
-    else:
-        result = "1"
-
-    user_message(caller_number, result)
-    plz = result
-    save_job_info(caller_number, "PLZ Tastatur", plz)
-
-    try:
-        location = get_geocode_result(plz)
-    except Exception as exc:
-        logger.error("Error getting geocode result: %s", exc)
-        location = None
-
-    if location and (location.plz or location.ort):
-        location_dict = location._asdict()
-        location_dict["zipcode"] = location.plz
-        location_dict["place"] = location.ort
-        save_location(caller_number, location_dict)
-        google_message(
+        agent_message(
             caller_number,
-            f"Standort über PLZ gefunden: {location.formatted_address} ({location.google_maps_link})",
+            settings.service(service).announcements.address_confirm.format(place_phrase=place_phrase),
         )
-        return await calculate_cost_unified(request)
+        gather = Gather(
+            input="speech",
+            language="de-DE",
+            action="/confirm-address",
+            speechTimeout="auto",
+            timeout=15,
+            enhanced=True,
+            model="experimental_conversations",
+        )
+        say(gather, settings.service(service).announcements.address_confirm.format(place_phrase=place_phrase))
 
-    google_message(
-        caller_number,
-        f"Keine Standortdaten für eingegebene PLZ {plz} gefunden.",
-    )
-    return await ask_send_sms_unified(request)
+        gather_2 = Gather(
+            input="speech",
+            language="de-DE",
+            action="/confirm-address",
+            speechTimeout="auto",
+            timeout=15,
+            enhanced=True,
+            model="phone_call",
+        )
+        say(gather_2, settings.service(service).announcements.address_confirm_prompt)
+        response.append(gather)
+        response.append(gather_2)
+        # Fallback: retry if no input received
+        response.redirect(f"{settings.env.SERVER_URL}/ask-adress")
+
+        return send_request(request, response)
 
 
-@router.api_route("/parse-location-correct-unified", methods=["GET", "POST"])
-async def parse_location_correct_unified(request: Request):
-    """Check whether the recognized address was correct."""
-    caller_number = await get_caller_number(request)
-    form_data = await request.form()
-    speech_result = form_data.get("SpeechResult", "")
-    user_message(caller_number, speech_result)
+async def confirm_address_handler(request: Request) -> str:
+    """Handle the case when the address has been confirmed."""
+    caller_number, called_number, form_data = await call_info(request)
+    service = get_service(caller_number)
+
+    transcription = form_data.get("SpeechResult", "")
+    user_message(caller_number, transcription)
 
     try:
-        correct, reasoning, duration, model_source = await asyncio.wait_for(
+        is_correct, reasoning, duration, model_source = await asyncio.wait_for(
             yes_no_question(
-                speech_result,
+                transcription,
                 "Der Kunde wurde gefragt ob die Adresse korrekt ist.",
             ),
             timeout=6.0,
         )
+        ai_message(caller_number, f"Address confirmation: {reasoning}", duration, model_source)
+
+        with new_response() as response:
+            if is_correct:
+                # Redirect to pricing
+                response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
+            else:
+                # Fall back to PLZ
+                response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
+
     except asyncio.TimeoutError:
-        ai_message(caller_number, "<Request timed out>", 6.0)
-        return await transfer_with_message(request)
+        ai_message(caller_number, "<Confirmation timed out>", 6.0)
+        logger.warning(f"Address confirmation timeout for caller {caller_number}, redirecting to PLZ")
+        with new_response() as response:
+            # Fallback to PLZ on timeout
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            return send_request(request, response)
 
-    ai_message(
-        caller_number,
-        f"<Address correct: {correct}. Reasoning: {reasoning}>",
-        duration,
-        model_source,
-    )
-
-    if correct:
-        return await calculate_cost_unified(request)
-
-    return await ask_plz_unified(request)
+    except HumanAgentRequested:
+        logger.info(f"Caller {caller_number} requested human agent during address confirmation.")
+        ai_message(caller_number, "<User requested human agent>", 0.0)
+        return await immediate_human_transfer(request, caller_number, service)

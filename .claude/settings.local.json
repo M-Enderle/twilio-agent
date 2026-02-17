@@ -22,7 +22,14 @@
       "Bash(npm run build:*)",
       "WebFetch(domain:project-osrm.org)",
       "WebFetch(domain:docs.x.ai)",
-      "Bash(poetry add:*)"
+      "Bash(poetry add:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(find:*)",
+      "Bash(git diff:*)",
+      "Bash(cat:*)",
+      "Bash(poetry show:*)",
+      "Bash(python:*)",
+      "Bash(poetry run pytest:*)"
     ]
   }
 }

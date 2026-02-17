@@ -107,10 +107,13 @@ def _closest_provider(
     client = _get_routes_client()
     for company in _load_companies(intent, include_fallback=False):
         try:
-            company_address = company.get(
-                "address",
-                company.get("adress", company.get("zipcode", "")),
-            )
+            company_address = company.get("address", "")
+            if not company_address:
+                logger.warning(
+                    "Skipping company %s - no address available",
+                    company.get("name", "unknown"),
+                )
+                continue
             response = client.compute_routes(
                 request=_compute_request(origin, company_address),
                 metadata=[
@@ -223,11 +226,36 @@ def _service_price(
     return price, max(minutes, 10), provider_name, provider_phone
 
 
+def get_price(
+    service: str, longitude: float, latitude: float
+) -> tuple[int, int, str, str]:
+    """Get price quote for a service at the given coordinates.
+
+    Args:
+        service: Service name (e.g., 'schluessel-allgaeu', 'notdienst-schluessel', 'notdienst-abschlepp').
+        longitude: Caller longitude.
+        latitude: Caller latitude.
+
+    Returns:
+        A tuple of (price, minutes, provider_name, provider_phone).
+    """
+    tiers, fallback = _get_service_pricing(service)
+    return _service_price(
+        _origin_from_coordinates(longitude, latitude),
+        service,
+        tiers,
+        fallback,
+    )
+
+
+# Deprecated: Use get_price() with service parameter instead
 def get_price_locksmith(
     longitude: float, latitude: float
 ) -> tuple[int, int, str, str]:
     """Get price quote for a locksmith service at the given coordinates.
 
+    DEPRECATED: Use get_price() with the actual service name instead.
+
     Args:
         longitude: Caller longitude.
         latitude: Caller latitude.
@@ -235,20 +263,17 @@ def get_price_locksmith(
     Returns:
         A tuple of (price, minutes, provider_name, provider_phone).
     """
-    tiers, fallback = _get_service_pricing("notdienst-schluessel")
-    return _service_price(
-        _origin_from_coordinates(longitude, latitude),
-        "notdienst-schluessel",
-        tiers,
-        fallback,
-    )
+    return get_price("notdienst-schluessel", longitude, latitude)
 
 
+# Deprecated: Use get_price() with service parameter instead
 def get_price_towing(
     longitude: float, latitude: float
 ) -> tuple[int, int, str, str]:
     """Get price quote for a towing service at the given coordinates.
 
+    DEPRECATED: Use get_price() with the actual service name instead.
+
     Args:
         longitude: Caller longitude.
         latitude: Caller latitude.
@@ -256,10 +281,4 @@ def get_price_towing(
     Returns:
         A tuple of (price, minutes, provider_name, provider_phone).
     """
-    tiers, fallback = _get_service_pricing("notdienst-abschlepp")
-    return _service_price(
-        _origin_from_coordinates(longitude, latitude),
-        "notdienst-abschlepp",
-        tiers,
-        fallback,
-    )
+    return get_price("notdienst-abschlepp", longitude, latitude)

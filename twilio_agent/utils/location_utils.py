@@ -4,14 +4,11 @@ Provides forward geocoding biased to the southern-Germany / Austria service
 area and extracts postal code (PLZ) and city (Ort) from the results.
 """
 
-import asyncio
 import logging
 import os
 from typing import NamedTuple, Optional
 
-import requests
-
-from twilio_agent.utils.ai import correct_plz
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +38,7 @@ class GeocodeResult(NamedTuple):
     ort: Optional[str]
 
 
-def _fetch_first_result(params: dict) -> Optional[dict]:
+async def _fetch_first_result(params: dict) -> Optional[dict]:
     """Send a geocode request to Google Maps and return the first result.
 
     Args:
@@ -51,12 +48,13 @@ def _fetch_first_result(params: dict) -> Optional[dict]:
         The first result dict from the API, or ``None`` on any failure.
     """
     try:
-        response = requests.get(
-            _GEOCODE_URL, params=params, timeout=_REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.RequestException:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                _GEOCODE_URL, params=params, timeout=_REQUEST_TIMEOUT
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError:
         logger.warning("Google Geocoding API request failed", exc_info=True)
         return None
 
@@ -108,12 +106,29 @@ def _extract_plz_ort(
     return postal, city
 
 
-def get_geocode_result(address: str) -> Optional[GeocodeResult]:
+async def get_plz_from_coordinates(lat: float, lon: float) -> Optional[str]:
+    """Reverse-geocode coordinates and return a 5-digit postal code, or None."""
+    if not _API_KEY:
+        raise ValueError("MAPS_API_KEY environment variable is not set")
+
+    result = await _fetch_first_result({
+        "latlng": f"{lat},{lon}",
+        "key": _API_KEY,
+        "language": "de",
+    })
+    if not result:
+        return None
+    plz, _ = _extract_plz_ort(result)
+    if plz and len(plz.strip()) == 5:
+        return plz
+    return None
+
+
+async def get_geocode_result(address: str) -> Optional[GeocodeResult]:
     """Geocode an address string using the Google Maps API.
 
     The lookup is biased towards the southern-Germany / Austria service
-    area.  When the API returns a result without a usable postal code but
-    with a city name, an LLM-assisted PLZ correction is attempted.
+    area.
 
     Args:
         address: Free-form address string (may be partial).
@@ -128,7 +143,7 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
     if not _API_KEY:
         raise ValueError("MAPS_API_KEY environment variable is not set")
 
-    forward = _fetch_first_result(
+    forward = await _fetch_first_result(
         {
             "address": address,
             "key": _API_KEY,
@@ -146,17 +161,6 @@ def get_geocode_result(address: str) -> Optional[GeocodeResult]:
     location = forward["geometry"]["location"]
     latitude, longitude = location["lat"], location["lng"]
     plz, ort = _extract_plz_ort(forward)
-
-    if len(plz or "") < 4 and ort:
-        try:
-            plz = asyncio.run(correct_plz(ort, latitude, longitude))
-        except RuntimeError:
-            # Already inside an event loop (e.g. called from async FastAPI
-            # handler).  Fall back to creating a task on the running loop.
-            loop = asyncio.get_event_loop()
-            plz = loop.run_until_complete(
-                correct_plz(ort, latitude, longitude)
-            )
 
     return GeocodeResult(
         latitude=latitude,

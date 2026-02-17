@@ -1,4 +1,4 @@
-import type { Standort, ActiveHoursConfig, PhoneNumber, EmergencyContact, DirectForwarding, SystemStatus, ServicePricing, Announcements, ServiceId, CallSummary, CallDetail } from "./types";
+import type { Standort, ActiveHoursConfig, PhoneNumber, EmergencyContact, DirectForwarding, SystemStatus, ServicePricing, Announcements, TransferSettings, ServiceId, CallSummary, CallDetail } from "./types";
 
 function getApiBase(): string {
 	if (typeof window === "undefined") {
@@ -128,6 +128,17 @@ export function updateDirectForwarding(serviceId: ServiceId, config: DirectForwa
 	});
 }
 
+export function getTransferSettings(serviceId: ServiceId): Promise<TransferSettings> {
+	return request(`/services/${serviceId}/settings/transfer`);
+}
+
+export function updateTransferSettings(serviceId: ServiceId, config: TransferSettings): Promise<TransferSettings> {
+	return request(`/services/${serviceId}/settings/transfer`, {
+		method: "PUT",
+		body: JSON.stringify(config),
+	});
+}
+
 // Status
 export function getStatus(): Promise<SystemStatus> {
 	return request("/status");
@@ -172,8 +183,9 @@ export function updateAnnouncements(serviceId: ServiceId, config: Announcements)
 }
 
 // Calls
-export function getCalls(): Promise<{ calls: CallSummary[]; total: number }> {
-	return request("/calls");
+export function getCalls(serviceId?: ServiceId): Promise<{ calls: CallSummary[]; total: number }> {
+	const params = serviceId ? `?service=${serviceId}` : "";
+	return request(`/calls${params}`);
 }
 
 export function getCallDetail(number: string, timestamp: string): Promise<CallDetail> {
@@ -202,6 +214,15 @@ export async function fetchRecordingBlob(
 	}
 	const blob = await res.blob();
 	return URL.createObjectURL(blob);
+}
+
+export function getRecordingUrl(
+	number: string,
+	timestamp: string,
+	recordingType: string
+): string {
+	// Return direct URL to recording endpoint (preserves HTTP headers for duration)
+	return `${getApiBase()}/calls/${number}/${timestamp}/recording/${recordingType}`;
 }
 
 // Service Territories (driving time grid cache)

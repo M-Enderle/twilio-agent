@@ -36,6 +36,7 @@
 		"@internationalized/date": "^3.11.0",
 		"arctic": "^3.7.0",
 		"d3-delaunay": "^6.0.4",
-		"leaflet": "^1.9.4"
+		"leaflet": "^1.9.4",
+		"wavesurfer.js": "^7.12.1"
 	}
 }

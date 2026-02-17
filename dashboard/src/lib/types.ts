@@ -23,7 +23,6 @@ export interface Standort {
 	id: string;
 	name: string;
 	address?: string;
-	zipcode?: string | number;
 	latitude?: number;
 	longitude?: number;
 	contacts: StandortKontakt[];
@@ -76,11 +75,14 @@ export interface CallSummary {
 	start_time: string;
 	intent: string;
 	live: boolean;
-	location: string;
+	location: string | Record<string, unknown>;
+	latitude?: number;
+	longitude?: number;
 	provider: string;
 	price: string;
 	hangup_reason: string;
 	transferred_to: string;
+	service?: ServiceId;
 }
 
 export interface CallMessage {
@@ -105,27 +107,30 @@ export interface CallDetail {
 }
 
 export interface Announcements {
+	// Begrüßung
 	greeting: string;
-	intent_prompt: string;
-	intent_not_understood: string;
-	intent_failed: string;
+	// Adresse erfassen
 	address_request: string;
 	address_processing: string;
 	address_confirm: string;
 	address_confirm_prompt: string;
+	// PLZ Fallback
 	zipcode_request: string;
+	plz_invalid_format: string;
+	plz_outside_area: string;
+	plz_not_found: string;
+	// SMS Standort
 	sms_offer: string;
-	sms_confirm_prompt: string;
-	sms_declined: string;
-	sms_sent: string;
-	sms_text: string;
-	price_quote: string;
-	yes_no_prompt: string;
+	sms_sent_confirmation: string;
+	// Preisangebot
+	price_offer: string;
+	price_offer_prompt: string;
+	connection_declined: string;
+	connection_timeout: string;
+	// Transfer
 	transfer_message: string;
-	goodbye: string;
-	all_busy: string;
-	no_input: string;
-	outbound_greeting: string;
-	outbound_yes_no: string;
-	driver_sms: string;
+}
+
+export interface TransferSettings {
+	ring_timeout: number;
 }

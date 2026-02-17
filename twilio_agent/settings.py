@@ -10,30 +10,35 @@ logger = logging.getLogger("uvicorn")
 
 VALID_SERVICES = ["schluessel-allgaeu", "notdienst-schluessel", "notdienst-abschlepp"]
 DEFAULT_ANNOUNCEMENTS = {
+    # Begrüßung
     "greeting": "Hallo! Wie kann ich Ihnen heute helfen?",
-    "intent_prompt": "Bitte beschreiben Sie Ihr Anliegen kurz.",
-    "intent_not_understood": "Ich habe Sie leider nicht verstanden. Könnten Sie das bitte wiederholen?",
-    "intent_failed": "Es tut mir leid, ich konnte Ihr Anliegen nicht erfassen.",
+    # Adresse erfassen
     "address_request": "An welcher Adresse benötigen Sie Hilfe?",
     "address_processing": "Einen Moment, ich prüfe die Verfügbarkeit an Ihrer Adresse.",
     "address_confirm": "Habe ich das richtig verstanden?",
-    "address_confirm_prompt": "Ist die Adresse korrekt?",
-    "zipcode_request": "Wie lautet die Postleitzahl?",
-    "sms_offer": "Soll ich Ihnen ein Angebot per SMS schicken?",
-    "sms_confirm_prompt": "Möchten Sie das Angebot erhalten?",
-    "sms_declined": "In Ordnung, kein Problem.",
-    "sms_sent": "Die SMS wurde versendet.",
-    "sms_text": "Hier ist Ihr Angebot.",
-    "price_quote": "Der Preis beträgt etwa {price} Euro.",
-    "yes_no_prompt": "Bitte antworten Sie mit Ja oder Nein.",
-    "transfer_message": "Ich verbinde Sie jetzt mit einem verfügbaren Partner.",
-    "goodbye": "Auf Wiederhören!",
-    "all_busy": "Leider sind aktuell alle Partner im Einsatz.",
-    "no_input": "Ich habe keine Eingabe erhalten.",
-    "outbound_greeting": "Hallo, hier ist der Notdienst.",
-    "outbound_yes_no": "Möchten Sie den Auftrag annehmen?",
-    "driver_sms": "Ein neuer Auftrag für Sie.",
+    "address_confirm_prompt": "Bitte bestätigen Sie mit ja oder nein, ob die Adresse korrekt ist.",
+    # PLZ Fallback
+    "zipcode_request": "Bitte geben Sie die Postleitzahl über den Nummernblock ein.",
+    "plz_invalid_format": "Die Postleitzahl konnte nicht erkannt werden. Bitte versuchen Sie es erneut.",
+    "plz_outside_area": "Diese Postleitzahl liegt außerhalb unseres Servicegebiets.",
+    "plz_not_found": "Diese Postleitzahl konnte nicht gefunden werden.",
+    # SMS Standort
+    "sms_offer": "Wir können Ihnen eine SMS mit einem Standort-Link zusenden. Möchten Sie das?",
+    "sms_sent_confirmation": "Ich habe Ihnen eine SMS mit einem Link zum Teilen Ihres Standorts gesendet. Auf Wiederhören.",
+    # Preisangebot
+    "price_offer": "Wir können Ihnen einen Dienstleister für {price_words} Euro anbieten. Die Ankunftszeit beträgt etwa {minutes_words} Minuten.",
+    "price_offer_prompt": "Möchten Sie mit dem Dienstleister verbunden werden? Bitte antworten Sie mit ja oder nein.",
+    "connection_declined": "Verstanden. Gibt es noch etwas, womit ich Ihnen helfen kann?",
+    "connection_timeout": "Ich habe Ihre Antwort nicht verstanden.",
+    # Transfer
+    "transfer_message": "Ich verbinde Sie jetzt.",
 }
+
+# ── Error Models ───────────────────────────────────────────────────
+
+class HumanAgentRequested(Exception):
+    """Raised when the user explicitly requests a human agent."""
+    pass
 
 # ── Data Models ────────────────────────────────────────────────────
 
@@ -55,7 +60,6 @@ class Location(BaseModel):
     id: Optional[str] = None
     name: str = ""  # Required - location/business name
     address: str = ""
-    zipcode: str | int = ""
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     contacts: List[LocationContact] = Field(default_factory=list)
@@ -81,29 +85,32 @@ class Pricing(BaseModel):
     fallbackNightPrice: int = 0
 
 class Announcements(BaseModel):
+    # Begrüßung
     greeting: str = DEFAULT_ANNOUNCEMENTS["greeting"]
-    intent_prompt: str = DEFAULT_ANNOUNCEMENTS["intent_prompt"]
-    intent_not_understood: str = DEFAULT_ANNOUNCEMENTS["intent_not_understood"]
-    intent_failed: str = DEFAULT_ANNOUNCEMENTS["intent_failed"]
+    # Adresse erfassen
     address_request: str = DEFAULT_ANNOUNCEMENTS["address_request"]
     address_processing: str = DEFAULT_ANNOUNCEMENTS["address_processing"]
     address_confirm: str = DEFAULT_ANNOUNCEMENTS["address_confirm"]
     address_confirm_prompt: str = DEFAULT_ANNOUNCEMENTS["address_confirm_prompt"]
+    # PLZ Fallback
     zipcode_request: str = DEFAULT_ANNOUNCEMENTS["zipcode_request"]
+    plz_invalid_format: str = DEFAULT_ANNOUNCEMENTS["plz_invalid_format"]
+    plz_outside_area: str = DEFAULT_ANNOUNCEMENTS["plz_outside_area"]
+    plz_not_found: str = DEFAULT_ANNOUNCEMENTS["plz_not_found"]
+    # SMS Standort
     sms_offer: str = DEFAULT_ANNOUNCEMENTS["sms_offer"]
-    sms_confirm_prompt: str = DEFAULT_ANNOUNCEMENTS["sms_confirm_prompt"]
-    sms_declined: str = DEFAULT_ANNOUNCEMENTS["sms_declined"]
-    sms_sent: str = DEFAULT_ANNOUNCEMENTS["sms_sent"]
-    sms_text: str = DEFAULT_ANNOUNCEMENTS["sms_text"]
-    price_quote: str = DEFAULT_ANNOUNCEMENTS["price_quote"]
-    yes_no_prompt: str = DEFAULT_ANNOUNCEMENTS["yes_no_prompt"]
+    sms_sent_confirmation: str = DEFAULT_ANNOUNCEMENTS["sms_sent_confirmation"]
+    # Preisangebot
+    price_offer: str = DEFAULT_ANNOUNCEMENTS["price_offer"]
+    price_offer_prompt: str = DEFAULT_ANNOUNCEMENTS["price_offer_prompt"]
+    connection_declined: str = DEFAULT_ANNOUNCEMENTS["connection_declined"]
+    connection_timeout: str = DEFAULT_ANNOUNCEMENTS["connection_timeout"]
+    # Transfer
     transfer_message: str = DEFAULT_ANNOUNCEMENTS["transfer_message"]
-    goodbye: str = DEFAULT_ANNOUNCEMENTS["goodbye"]
-    all_busy: str = DEFAULT_ANNOUNCEMENTS["all_busy"]
-    no_input: str = DEFAULT_ANNOUNCEMENTS["no_input"]
-    outbound_greeting: str = DEFAULT_ANNOUNCEMENTS["outbound_greeting"]
-    outbound_yes_no: str = DEFAULT_ANNOUNCEMENTS["outbound_yes_no"]
-    driver_sms: str = DEFAULT_ANNOUNCEMENTS["driver_sms"]
+
+class TransferSettings(BaseModel):
+    """Settings for call transfer behavior."""
+    ring_timeout: int = 15  # Seconds to ring before trying next contact
 
 
 # ── Environment Settings ──────────────────────────────────────────
@@ -111,29 +118,51 @@ class Announcements(BaseModel):
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # API Keys & Secrets
-    TELEGRAM_BOT_TOKEN: Optional[SecretStr] = None
-    TELEGRAM_CHAT_ID: Optional[str] = None
-    MAPS_API_KEY: Optional[SecretStr] = None
-    XAI_API_KEY: Optional[SecretStr] = None
-    BASETEN_API_KEY: Optional[SecretStr] = None
-    ELEVENLABS_API_KEY: Optional[SecretStr] = None
+    # ── API Keys & Secrets ───────────────────────────────────
     SECRET_KEY: SecretStr = SecretStr("insecure-default-key")
+    MAPS_API_KEY: Optional[SecretStr] = None
 
-    # Twilio
+    # ── AI / LLM ────────────────────────────────────────────
+    XAI_API_KEY: Optional[SecretStr] = None
+    XAI_MODEL: str = "grok-4-fast-non-reasoning"
+    BASETEN_API_KEY: Optional[SecretStr] = None
+    BASETEN_BASE_URL: str = "https://inference.baseten.co/v1"
+    BASETEN_MODEL: str = "openai/gpt-oss-120b"
+
+    # ── Telegram ────────────────────────────────────────────
+    TELEGRAM_BOT_TOKEN: Optional[SecretStr] = None  # Legacy/fallback
+    TELEGRAM_CHAT_IDS: str = ""  # Comma-separated list of chat IDs
+
+    # Service-specific bot tokens (all use same TELEGRAM_CHAT_IDS)
+    TELEGRAM_BOT_TOKEN_SCHLUESSEL_ALLGAEU: Optional[SecretStr] = None
+    TELEGRAM_BOT_TOKEN_NOTDIENST_SCHLUESSEL: Optional[SecretStr] = None
+    TELEGRAM_BOT_TOKEN_NOTDIENST_ABSCHLEPP: Optional[SecretStr] = None
+
+    # ── Twilio ──────────────────────────────────────────────
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: SecretStr = SecretStr("")
     TWILIO_PHONE_NUMBER: str = ""
     NOTDIENSTSTATION_PHONE_NUMBER: Optional[str] = None
+    TWILIO_RECORDING_ACCOUNT: Optional[str] = None
+    TWILIO_ACCOUNT_SID_RO: Optional[str] = None
+    TWILIO_AUTH_TOKEN_RO: Optional[SecretStr] = None
 
-    # Redis
+    # ── ElevenLabs ──────────────────────────────────────────
+    ELEVENLABS_API_KEY: Optional[SecretStr] = None
+    ELEVENLABS_VOICE_ID: str = "kaGxVtjLwllv1bi2GFag"
+    ELEVENLABS_TTS_MODEL: str = "eleven_v3"
+    ELEVENLABS_STT_MODEL: str = "scribe_v2"
+    ELEVENLABS_STT_URL: str = "https://api.elevenlabs.io/v1/speech-to-text"
+
+    # ── Redis ───────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379"
 
-    # App Config
+    # ── App Config ──────────────────────────────────────────
     DEBUG: bool = False
     ENVIRONMENT: str = "production"
     DOMAIN: str = "localhost"
     SERVER_URL: Optional[str] = None
+    DASHBOARD_URL: Optional[str] = None
 
 
 # ── Service Settings Manager ──────────────────────────────────────
@@ -229,6 +258,14 @@ class ServiceSettings:
     def announcements(self, value: Announcements):
         self._set("announcements", value)
 
+    @property
+    def transfer_settings(self) -> TransferSettings:
+        return self._get("transfer_settings", TransferSettings)
+
+    @transfer_settings.setter
+    def transfer_settings(self, value: TransferSettings):
+        self._set("transfer_settings", value)
+
 
 class GlobalSettings:
     def __init__(self):
@@ -237,6 +274,28 @@ class GlobalSettings:
 
     def service(self, service_id: str) -> ServiceSettings:
         return ServiceSettings(service_id)
+
+    def get_telegram_chat_ids(self) -> list[str]:
+        """Get list of Telegram chat IDs from the comma-separated env variable."""
+        return [cid.strip() for cid in self.env.TELEGRAM_CHAT_IDS.split(",") if cid.strip()]
+
+    def get_telegram_bot_token(self, service_id: str) -> Optional[str]:
+        """Get the Telegram bot token for a specific service from environment variables."""
+        token_map = {
+            "schluessel-allgaeu": self.env.TELEGRAM_BOT_TOKEN_SCHLUESSEL_ALLGAEU,
+            "notdienst-schluessel": self.env.TELEGRAM_BOT_TOKEN_NOTDIENST_SCHLUESSEL,
+            "notdienst-abschlepp": self.env.TELEGRAM_BOT_TOKEN_NOTDIENST_ABSCHLEPP,
+        }
+
+        token = token_map.get(service_id)
+        if token:
+            return token.get_secret_value()
+
+        # Fallback to legacy token
+        if self.env.TELEGRAM_BOT_TOKEN:
+            return self.env.TELEGRAM_BOT_TOKEN.get_secret_value()
+
+        return None
 
     @property
     def direct_forwarding(self) -> DirectForwarding:

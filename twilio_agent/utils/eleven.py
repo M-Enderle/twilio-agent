@@ -1,7 +1,6 @@
 """ElevenLabs text-to-speech and speech-to-text utilities with disk caching."""
 
 import logging
-import os
 import time
 
 import requests
@@ -9,19 +8,14 @@ from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
 
 from twilio_agent.utils.cache import CacheManager
+from twilio_agent.actions.redis_actions import set_transcription_text
+from twilio_agent.settings import settings
 
-logger = logging.getLogger("uvicorn")
+logger = logging.getLogger("ElevenLabs")
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-TWILIO_ACCOUNT_SID_RO = os.getenv("TWILIO_ACCOUNT_SID_RO")
-TWILIO_AUTH_TOKEN_RO = os.getenv("TWILIO_AUTH_TOKEN_RO")
-
-VOICE_ID = "jccKWdITZiywXGZfLmCo"
-TTS_MODEL_ID = "eleven_turbo_v2_5"
-STT_MODEL_ID = "scribe_v2"
-STT_API_URL = "https://api.elevenlabs.io/v1/speech-to-text"
-
-_elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+# Initialize ElevenLabs client
+_api_key = settings.env.ELEVENLABS_API_KEY.get_secret_value() if settings.env.ELEVENLABS_API_KEY else None
+_elevenlabs_client = ElevenLabs(api_key=_api_key) if _api_key else None
 
 cache_manager = CacheManager("audio")
 
@@ -47,6 +41,10 @@ def generate_speech(text: str) -> tuple[bytes, float]:
     if not text:
         return b"", 0.0
 
+    if not _elevenlabs_client:
+        logger.error("ElevenLabs API key not configured")
+        raise ValueError("ElevenLabs API key not configured")
+
     input_data = {"text": text}
     cached = cache_manager.get("generate_speech", input_data)
     if cached is not None:
@@ -57,13 +55,13 @@ def generate_speech(text: str) -> tuple[bytes, float]:
 
     try:
         response = _elevenlabs_client.text_to_speech.convert(
-            voice_id=VOICE_ID,
+            voice_id=settings.env.ELEVENLABS_VOICE_ID,
             output_format="mp3_22050_32",
             language_code="de",
             text=text,
-            model_id=TTS_MODEL_ID,
+            model_id=settings.env.ELEVENLABS_TTS_MODEL,
             voice_settings=VoiceSettings(
-                stability=0.9,
+                stability=1.0,
                 similarity_boost=0.9,
             ),
         )
@@ -85,7 +83,7 @@ def generate_speech(text: str) -> tuple[bytes, float]:
     return bytes_data, duration
 
 
-def transcribe_speech(recording_url: str) -> tuple[str, float]:
+def transcribe_speech(redording_id: str, call_number: str) -> tuple[str, float]:
     """Transcribe speech from a Twilio recording URL via ElevenLabs STT.
 
     The recording is fetched by ElevenLabs using Twilio read-only
@@ -99,30 +97,45 @@ def transcribe_speech(recording_url: str) -> tuple[str, float]:
         A tuple of (transcribed_text, request_duration_seconds). On
         failure the text is ``"<Error during transcription>"``.
     """
-    if not TWILIO_ACCOUNT_SID_RO or not TWILIO_AUTH_TOKEN_RO:
+    twilio_account_sid_ro = settings.env.TWILIO_ACCOUNT_SID_RO
+    twilio_auth_token_ro = settings.env.TWILIO_AUTH_TOKEN_RO.get_secret_value() if settings.env.TWILIO_AUTH_TOKEN_RO else None
+    elevenlabs_api_key = settings.env.ELEVENLABS_API_KEY.get_secret_value() if settings.env.ELEVENLABS_API_KEY else None
+
+    if not twilio_account_sid_ro or not twilio_auth_token_ro:
         logger.error(
             "TWILIO_ACCOUNT_SID_RO or TWILIO_AUTH_TOKEN_RO not set; "
             "cannot authenticate recording URL for transcription"
         )
         return "<Error during transcription>", 0.0
 
+    if not elevenlabs_api_key:
+        logger.error("ELEVENLABS_API_KEY not configured")
+        return "<Error during transcription>", 0.0
+
+    recording_url = _build_recording_url(redording_id)
+    set_transcription_text(call_number, None)  # Clear previous transcription while processing new one
+
+    logger.info("Fetching recording for transcription from URL: %s", recording_url)
+
     start_time = time.perf_counter()
-    logger.info("Starting ElevenLabs transcription for: %s", recording_url)
 
     authenticated_url = (
-        f"https://{TWILIO_ACCOUNT_SID_RO}:{TWILIO_AUTH_TOKEN_RO}"
+        f"https://{twilio_account_sid_ro}:{twilio_auth_token_ro}"
         f"@{recording_url.replace('https://', '')}"
     )
+
+    logger.info("Authenticated recording URL for ElevenLabs: %s", authenticated_url)
+
     data = {
-        "model_id": STT_MODEL_ID,
+        "model_id": settings.env.ELEVENLABS_STT_MODEL,
         "language_code": "deu",
         "tag_audio_events": "false",
         "cloud_storage_url": authenticated_url,
     }
 
     http_response = requests.post(
-        STT_API_URL,
-        headers={"xi-api-key": ELEVENLABS_API_KEY},
+        settings.env.ELEVENLABS_STT_URL,
+        headers={"xi-api-key": elevenlabs_api_key},
         data=data,
         timeout=30,
     )
@@ -142,4 +155,12 @@ def transcribe_speech(recording_url: str) -> tuple[str, float]:
         duration,
         _truncate_for_log(text),
     )
-    return text, duration
+
+    set_transcription_text(call_number, text)
+
+
+def _build_recording_url(recording_id: str) -> str:
+    return (
+        f"https://api.twilio.com/2010-04-01/Accounts/"
+        f"{settings.env.TWILIO_RECORDING_ACCOUNT}/Recordings/{recording_id}"
+    )

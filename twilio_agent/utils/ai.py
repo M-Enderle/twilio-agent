@@ -6,7 +6,6 @@ responds within 1 second. Results are cached via ``CacheManager``.
 
 import asyncio
 import logging
-import os
 import time
 from typing import Callable
 
@@ -16,14 +15,20 @@ from xai_sdk.chat import system, user
 from xai_sdk.tools import web_search
 
 from twilio_agent.utils.cache import CacheManager
+from twilio_agent.settings import settings, HumanAgentRequested
 
-logger = logging.getLogger("uvicorn")
+logger = logging.getLogger("AI")
 
-client = Client(api_key=os.environ.get("XAI_API_KEY", ""))
+# Initialize AI clients
+_xai_api_key = settings.env.XAI_API_KEY.get_secret_value() if settings.env.XAI_API_KEY else ""
+_baseten_api_key = settings.env.BASETEN_API_KEY.get_secret_value() if settings.env.BASETEN_API_KEY else ""
+
+client = Client(api_key=_xai_api_key)
 baseten_client = OpenAI(
-    api_key=os.environ.get("BASETEN_API_KEY", ""),
-    base_url="https://inference.baseten.co/v1",
-)
+    api_key=_baseten_api_key,
+    base_url=settings.env.BASETEN_BASE_URL,
+) if _baseten_api_key else None
+
 cache_manager = CacheManager("LLM")
 
 
@@ -57,7 +62,7 @@ async def _ask_grok(system_prompt: str, user_prompt: str, use_web_search: bool =
     def _sync_call():
         try:
             tools = [web_search()] if use_web_search else None
-            chat = client.chat.create(model="grok-4-fast-non-reasoning", temperature=0, tools=tools)
+            chat = client.chat.create(model=settings.env.XAI_MODEL, temperature=0, tools=tools)
             chat.append(system(system_prompt))
             chat.append(user(user_prompt))
             return chat.sample().content.strip()
@@ -70,14 +75,14 @@ async def _ask_grok(system_prompt: str, user_prompt: str, use_web_search: bool =
 
 async def _ask_baseten(system_prompt: str, user_prompt: str) -> str:
     """GPT-OSS-120B via Baseten, run in a thread to be awaitable."""
-    if not os.environ.get("BASETEN_API_KEY"):
+    if not baseten_client:
         logger.debug("Baseten client not configured.")
         return ""
 
     def _sync_call():
         try:
             response = baseten_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model=settings.env.BASETEN_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -154,98 +159,19 @@ async def _cached_llm_request(
     try:
         start = time.monotonic()
         response, model_source = await _ask_llm_parallel(system_prompt, user_prompt)
+        if "MITARBEITER" in response.upper():
+            logger.info("Detected request for human agent in %s, overriding response.", cache_key)
+            raise HumanAgentRequested("User requested human agent.")
         parsed = parse_fn(response.strip())
         duration = time.monotonic() - start
         cache_manager.set(cache_key, cache_input, {**parsed, "duration": duration})
         logger.info("%s complete. Model: %s", cache_key, model_source)
         return build_return(parsed, duration, model_source)
+    except HumanAgentRequested:
+        raise
     except Exception as e:
         logger.error("Error in %s: %s", cache_key, e)
         return error_return(e)
-
-
-async def classify_intent(spoken_text: str) -> tuple[str, str, float | None, str]:
-    """Classify spoken text into a service category.
-
-    Args:
-        spoken_text: Transcribed speech from the caller.
-
-    Returns:
-        A 4-tuple of ``(classification, reasoning, duration, model_source)``
-        where *classification* is one of ``schlüsseldienst``,
-        ``abschleppdienst``, ``adac``, ``mitarbeiter``, or ``andere``.
-    """
-    choices = ["schlüsseldienst", "abschleppdienst", "adac", "mitarbeiter", "andere"]
-    fallback = "andere"
-
-    if not spoken_text:
-        return fallback, "Kein Text vorhanden.", None, "cache"
-
-    choices_str = "', '".join(choices)
-    system_prompt = f"""
-    Du klassifizierst exakt in eine dieser Klassen: '{choices_str}'. Gib die Klassifizierung und eine kurze Begründung auf Deutsch aus.
-
-    FORMAT: <Begründung> -> <Klasse>
-
-    Wähle EINE der folgenden Klassen: {choices_str}
-    Gebe die klasse und begründung ohne < und > aus. Nutze immmer ->.
-
-    Begründung kurz auf Deutsch. Nenne wenn möglich die Regel. max 10 wörter.
-
-    REGELN (kurz & strikt):
-    1. abschleppdienst:
-       1.1 Alle KFZ-/Pannen-/Fahrzeugprobleme.
-       1.2 Varianten: Motor/Mordor, Wagen/WAAGE, Batterie leer, Reifen/Reif kaputt, kein Benzin, ab schleppen, abschleppen, Panne/Pfanne, Rauch, brennt.
-       1.3 Eingeschlossener Autoschlüssel (Schlüssel im Auto, Schüssel im Auto, steckt im Auto) => abschleppdienst.
-    2. schlüsseldienst:
-       2.1 Haus / Wohnung / Tür (Tür/Tour), Schloss zu.
-       2.2 Schlüssel (Schlüssel/Schüssel) verloren/abgebrochen/steckt von innen im Auto.
-       2.3 Alles rund ums Auto wenn der Schlüssel betroffen ist.
-       2.4 "Türen sind zu" ohne klaren Auto-Kontext => schlüsseldienst.
-    3. adac:
-       3.1 Erwähnungen/Varianten: adac, a d a c, a d c, ad hoc dienst (falls offensichtlich gemeint), der ac? => adac.
-    4. mitarbeiter:
-       4.1 Wunsch nach Mensch / Mitarbeiter / Arbeiter / Agent / realer Person / durchstellen / verbinden / sprechen mit jemand / menschlicher Ansprechpartner.
-       4.2 Auch verschrieben (mit Arbeiter, Arbeiter).
-       4.3 Aussagen wie "Kann ich mit jemandem über mein Auto reden?" => mitarbeiter.
-       4.4 Privates Anliegen => mitarbeiter.
-    5. andere:
-       5.1 Alles Administrative (Kündigung, Kostenfrage).
-       5.2 Unklare generische Hilfe ("Brauche Hilfe").
-       5.3 Irrelevantes oder zu vages ohne klare Zuordnung.
-
-    PRIORITÄTEN BEI AMBIGUITÄT:
-    1. Wenn sowohl Schlüssel- als-auch Auto-Kontext: Entscheide immer für schlüsseldienst.
-    2. Enthält klaren Wunsch nach Mensch (sprechen, verbinden) überschreibt andere Hinweise => mitarbeiter.
-    3. Sonst fallback '{fallback}'.
-
-    Beispiele
-    - "Ich habe meinen Autoschlüssel verloren" => "Schlüssel verloren, Auto betroffen. -> schlüsseldienst"
-    - "Mein Auto springt nicht an" => "Auto startet nicht. -> abschleppdienst"
-
-    """
-
-    def parse(response: str) -> dict:
-        parts = _parse_arrow_response(response)
-        if len(parts) == 2:
-            reasoning, classification = parts[0], parts[1].lower()
-        else:
-            classification = response.lower()
-            reasoning = "Keine Begründung gegeben."
-        result = classification if classification in choices else fallback
-        if result != classification:
-            reasoning = f"Unerwartete Klassifizierung '{classification}', fallback zu '{result}'. Ursprüngliche Begründung: {reasoning}"
-        return {"classification": result, "reasoning": reasoning}
-
-    return await _cached_llm_request(
-        cache_key="classify_intent",
-        cache_input={"spoken_text": spoken_text},
-        system_prompt=system_prompt,
-        user_prompt=f'Kategorisiere diese Anfrage: "{spoken_text}"',
-        parse_fn=parse,
-        build_return=lambda d, dur, src: (d["classification"], d["reasoning"], dur, src),
-        error_return=lambda e: (fallback, f"Fehler: {e}", None, "unknown"),
-    )
 
 
 async def yes_no_question(
@@ -283,6 +209,9 @@ async def yes_no_question(
     Beispiele:
     - "ja gerne" => "Klar ja. -> Ja"
     - "nein danke" => "Klar nein. -> Nein"
+
+    SONDERREGEL:
+    !! Wenn der user nach einem echten Menschen, Mitarbeiter oder Agent fragt, gebe einfach "MITARBEITER" zurück und ignoriere die Standortfrage komplett, auch wenn Standortinformationen gegeben sind. !!
     """
 
     def parse(response: str) -> dict:
@@ -357,6 +286,9 @@ async def process_location(
 
     Orte die oft vorkommen:
     Immenstadt, Kempten, Memmingen, Allgäu region
+
+    SONDERREGEL:
+    !! Wenn der user nach einem echten Menschen, Mitarbeiter oder Agent fragt, gebe einfach "MITARBEITER" zurück und ignoriere die Standortfrage komplett, auch wenn Standortinformationen gegeben sind. !!
     """
 
     def parse(response: str) -> dict:

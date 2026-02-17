@@ -136,16 +136,18 @@ class TestExtractPlzOrt:
 class TestGetGeocodeResult:
     """Tests for the main public function."""
 
-    def test_raises_without_api_key(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_raises_without_api_key(self, monkeypatch):
         monkeypatch.setattr(
             "twilio_agent.utils.location_utils._API_KEY", None
         )
         with pytest.raises(ValueError, match="MAPS_API_KEY"):
-            get_geocode_result("some address")
+            await get_geocode_result("some address")
 
     @requires_maps_api
-    def test_known_address_returns_result(self):
-        result = get_geocode_result("Marienplatz 1, 80331 Muenchen")
+    @pytest.mark.asyncio
+    async def test_known_address_returns_result(self):
+        result = await get_geocode_result("Marienplatz 1, 80331 Muenchen")
         assert result is not None
         assert isinstance(result, GeocodeResult)
         assert isinstance(result.latitude, float)
@@ -154,29 +156,33 @@ class TestGetGeocodeResult:
         assert "google.com/maps" in result.google_maps_link
 
     @requires_maps_api
-    def test_known_address_has_plz(self):
-        result = get_geocode_result("Marienplatz 1, 80331 Muenchen")
+    @pytest.mark.asyncio
+    async def test_known_address_has_plz(self):
+        result = await get_geocode_result("Marienplatz 1, 80331 Muenchen")
         if result is not None:
             assert result.plz is not None
             assert result.plz.isdigit()
             assert 4 <= len(result.plz) <= 5
 
     @requires_maps_api
-    def test_known_address_has_ort(self):
-        result = get_geocode_result("Marienplatz 1, 80331 Muenchen")
+    @pytest.mark.asyncio
+    async def test_known_address_has_ort(self):
+        result = await get_geocode_result("Marienplatz 1, 80331 Muenchen")
         if result is not None:
             assert result.ort is not None
             assert len(result.ort) > 0
 
     @requires_maps_api
-    def test_nonsense_address_returns_none_or_result(self):
+    @pytest.mark.asyncio
+    async def test_nonsense_address_returns_none_or_result(self):
         # Google may still geocode gibberish; we just verify no crash
-        result = get_geocode_result("xyzzy123nonsense")
+        result = await get_geocode_result("xyzzy123nonsense")
         assert result is None or isinstance(result, GeocodeResult)
 
     @requires_maps_api
-    def test_plz_only_input(self):
-        result = get_geocode_result("87509")
+    @pytest.mark.asyncio
+    async def test_plz_only_input(self):
+        result = await get_geocode_result("87509")
         if result is not None:
             assert isinstance(result, GeocodeResult)
             assert result.plz is not None or result.ort is not None
