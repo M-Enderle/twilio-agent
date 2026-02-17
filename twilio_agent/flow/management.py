@@ -44,26 +44,26 @@ async def add_locksmith_contacts(request: Request):
     clear_caller_queue(caller_number)
 
     cm = ContactManager()
-    first_contact_name = get_job_info(caller_number, "Anbieter")
+    sm = SettingsManager()
+    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact()
     contacts = cm.get_contacts_for_category("locksmith")
 
     # If a specific provider was determined (e.g. by pricing), add them first
-    if first_contact_name:
-        for contact in contacts:
-            if contact.get("name", "").lower() == first_contact_name.lower():
-                name = contact.get("name", "")
-                phone = _get_phone_for_contact(name, contact.get("phone", ""))
-                add_to_caller_queue(caller_number, name, phone)
+    for contact in contacts:
+        if contact.get("name", "").lower() == first_contact_name.lower():
+            name = contact.get("name", "")
+            phone = _get_phone_for_contact(name, contact.get("phone", ""))
+            add_to_caller_queue(caller_number, name, phone)
 
-                # Add all fallbacks from this contact
-                fallbacks_json = contact.get("fallbacks_json", "")
-                if fallbacks_json:
-                    fallbacks = json.loads(fallbacks_json)
-                    for fb in fallbacks:
-                        fb_name = fb.get("name", "")
-                        fb_phone = _get_phone_for_contact(fb_name, fb.get("phone", ""))
-                        add_to_caller_queue(caller_number, fb_name, fb_phone)
-                break
+            # Add all fallbacks from this contact
+            fallbacks_json = contact.get("fallbacks_json", "")
+            if fallbacks_json:
+                fallbacks = json.loads(fallbacks_json)
+                for fb in fallbacks:
+                    fb_name = fb.get("name", "")
+                    fb_phone = _get_phone_for_contact(fb_name, fb.get("phone", ""))
+                    add_to_caller_queue(caller_number, fb_name, fb_phone)
+            break
 
 
 async def add_towing_contacts(request: Request):
@@ -72,10 +72,26 @@ async def add_towing_contacts(request: Request):
     clear_caller_queue(caller_number)
 
     cm = ContactManager()
-    for contact in cm.get_contacts_for_category("towing"):
-        name = contact.get("name", "")
-        phone = _get_phone_for_contact(name, contact.get("phone", ""))
-        add_to_caller_queue(caller_number, name, phone)
+    sm = SettingsManager()
+    first_contact_name = get_job_info(caller_number, "Anbieter") or sm.get_emergency_contact()
+    contacts = cm.get_contacts_for_category("towing")
+
+    # If a specific provider was determined (e.g. by pricing), add them first
+    for contact in contacts:
+        if contact.get("name", "").lower() == first_contact_name.lower():
+            name = contact.get("name", "")
+            phone = _get_phone_for_contact(name, contact.get("phone", ""))
+            add_to_caller_queue(caller_number, name, phone)
+
+            # Add all fallbacks from this contact
+            fallbacks_json = contact.get("fallbacks_json", "")
+            if fallbacks_json:
+                fallbacks = json.loads(fallbacks_json)
+                for fb in fallbacks:
+                    fb_name = fb.get("name", "")
+                    fb_phone = _get_phone_for_contact(fb_name, fb.get("phone", ""))
+                    add_to_caller_queue(caller_number, fb_name, fb_phone)
+            break
 
 
 async def add_default_contacts(request: Request):
