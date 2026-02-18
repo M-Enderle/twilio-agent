@@ -285,7 +285,7 @@ def outbound_call_after_sms(to: str) -> None:
         timeout=15,
     )
     say(gather, f"Hier ist die Notdienststation. Wir haben deinen Standort erhalten. {offer_message}")
-    agent_message(to, f"SMS location confirmed. {offer_message}")
+    agent_message(to, f"{offer_message}")
     response.append(gather)
 
     gather2 = Gather(
@@ -331,11 +331,20 @@ def send_job_details_sms(caller: str, transferred_to: str) -> None:
         return
     _, from_number = result
 
+    recognized = get_job_info(caller, "Adresse erkannt") or ""
+    formatted = location.get("formatted_address", "Unbekannt")
+
+    address_lines = ""
+    if recognized:
+        address_lines = f"Adresse erkannt: {recognized}\nStandort: {formatted}"
+    else:
+        address_lines = f"Standort: {formatted}"
+
     message_body = f"""Anrufdetails:
 Anrufer: {caller}
-Adresse: {location.get('formatted_address', 'Unbekannt')}
-Preis: {get_job_info(caller, 'Preis')} Euro
-Wartezeit: {get_job_info(caller, 'Wartezeit')} min
+{address_lines}
+Preis: {get_job_info(caller, 'Preis') or 'Unbekannt'}
+Wartezeit: {get_job_info(caller, 'Wartezeit') or get_job_info(caller, 'Ankunftszeit') or 'Unbekannt'}
 {location.get('google_maps_link', 'Unbekannt')}"""
 
     client.messages.create(
