@@ -32,6 +32,7 @@ DEFAULT_ANNOUNCEMENTS = {
     "connection_timeout": "Ich habe Ihre Antwort nicht verstanden.",
     # Transfer
     "transfer_message": "Ich verbinde Sie jetzt.",
+    "no_agents_available": "Leider ist momentan niemand erreichbar. Bitte versuchen Sie es in 5 Minuten erneut.",
 }
 
 # ── Error Models ───────────────────────────────────────────────────
@@ -107,6 +108,7 @@ class Announcements(BaseModel):
     connection_timeout: str = DEFAULT_ANNOUNCEMENTS["connection_timeout"]
     # Transfer
     transfer_message: str = DEFAULT_ANNOUNCEMENTS["transfer_message"]
+    no_agents_available: str = DEFAULT_ANNOUNCEMENTS["no_agents_available"]
 
 class TransferSettings(BaseModel):
     """Settings for call transfer behavior."""
@@ -156,6 +158,10 @@ class EnvSettings(BaseSettings):
 
     # ── Redis ───────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379"
+
+    # ── Loki Logging ─────────────────────────────────────────
+    LOKI_URL: Optional[str] = None
+    LOKI_ORG_ID: Optional[str] = None
 
     # ── App Config ──────────────────────────────────────────
     DEBUG: bool = False

@@ -75,19 +75,10 @@ async def parse_transfer_call_handler(request: Request, name: str, phone: str) -
         if transfer_result == "no_more_agents":
             # No more contacts in queue - inform caller and hang up
             logger.error(f"No more contacts available for {caller_number}")
-            say(
-                response,
-                "Leider ist momentan niemand erreichbar. Bitte versuche es später erneut."
-            )
-            agent_message(caller_number, "All transfer attempts failed - no more contacts in queue")
+            announcements = settings.service(service).announcements
+            say(response, announcements.no_agents_available)
+            agent_message(caller_number, announcements.no_agents_available)
             save_job_info(caller_number, "hangup_reason", "Keine Mitarbeiter erreichbar")
             response.hangup()
-        elif transfer_result == "no_service":
-            # Could not determine service
-            logger.error(f"Could not determine service for {caller_number} during transfer retry")
-            say(response, "Ein technischer Fehler ist aufgetreten.")
-            save_job_info(caller_number, "hangup_reason", "Technischer Fehler bei Weiterleitung")
-            response.hangup()
-        # else: transfer_result == "transferring" - start_transfer already added Dial to response
 
     return send_request(request, response)

@@ -18,6 +18,7 @@ RUN apt-get update \
        libfreetype6-dev \
        libpng-dev \
        supervisor \
+       ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20.x

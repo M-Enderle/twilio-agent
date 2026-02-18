@@ -42,6 +42,7 @@
 		connection_timeout: "Ich habe deine Antwort nicht verstanden.",
 		// Transfer
 		transfer_message: "Ich verbinde Sie jetzt.",
+		no_agents_available: "Leider ist momentan niemand erreichbar. Bitte versuchen Sie es in 5 Minuten erneut.",
 	};
 
 	interface SpeechNode {
@@ -151,6 +152,7 @@
 			badgeColor: "bg-slate-100 text-slate-700",
 			nodes: [
 				{ key: "transfer_message", label: "Verbindungsansage", description: "Weiterleitung zu Mitarbeiter oder Dienstleister", placeholders: [] },
+				{ key: "no_agents_available", label: "Niemand erreichbar", description: "Wenn kein Mitarbeiter erreichbar ist", placeholders: [] },
 			],
 		},
 	];

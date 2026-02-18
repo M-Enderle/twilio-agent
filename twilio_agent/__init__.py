@@ -89,4 +89,35 @@ def configure_logging() -> None:
     logging.getLogger("twilio.http_client").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+    # Attach Loki handler if configured
+    _setup_loki_handler(root_logger)
+
     _LOGGING_CONFIGURED = True
+
+
+def _setup_loki_handler(root_logger: logging.Logger) -> None:
+    """Attach a non-blocking Loki log handler if LOKI_URL is set."""
+    import os
+
+    loki_url = os.environ.get("LOKI_URL")
+    if not loki_url:
+        return
+
+    try:
+        from twilio_agent.logging_loki import create_loki_handler
+
+        loki_org_id = os.environ.get("LOKI_ORG_ID")
+        handler = create_loki_handler(
+            url=loki_url,
+            org_id=loki_org_id,
+            labels={
+                "service_name": "twilio-agent",
+                "environment": os.environ.get("ENVIRONMENT", "production"),
+                "host": os.environ.get("DOMAIN", "localhost"),
+            },
+        )
+        root_logger.addHandler(handler)
+        root_logger.info("[Loki] Handler attached")
+    except Exception:
+        # Never let Loki misconfiguration prevent app startup
+        root_logger.warning("[Loki] Failed to attach handler", exc_info=True)

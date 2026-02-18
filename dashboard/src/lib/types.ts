@@ -129,6 +129,7 @@ export interface Announcements {
 	connection_timeout: string;
 	// Transfer
 	transfer_message: string;
+	no_agents_available: string;
 }
 
 export interface TransferSettings {

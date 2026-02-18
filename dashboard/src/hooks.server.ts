@@ -1,9 +1,16 @@
 import type { Handle } from "@sveltejs/kit";
 import { dev } from "$app/environment";
 import { env } from "$env/dynamic/private";
+import { logger } from "$lib/server/logger";
 
 export const handle: Handle = async ({ event, resolve }) => {
+	const start = Date.now();
 	const response = await resolve(event);
+	const duration = Date.now() - start;
+
+	logger.info(
+		`${event.request.method} ${event.url.pathname} ${response.status} ${duration}ms`
+	);
 
 	response.headers.set("X-Frame-Options", "DENY");
 	response.headers.set("X-Content-Type-Options", "nosniff");
@@ -25,6 +32,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 		connectSources.push("http://localhost:8000");
 		// Vite HMR uses websockets on the dev server
 		connectSources.push("ws://localhost:*");
+		// Allow dev tunnels (e.g. VS Code port forwarding)
+		connectSources.push("https://*.devtunnels.ms:*");
 	}
 
 	response.headers.set(

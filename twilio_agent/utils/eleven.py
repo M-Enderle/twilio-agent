@@ -1,11 +1,22 @@
 """ElevenLabs text-to-speech and speech-to-text utilities with disk caching."""
 
+import io
 import logging
+import os
+import shutil
 import time
 
 import requests
 from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
+
+# Ensure pydub can find ffmpeg before importing AudioSegment
+if not shutil.which("ffmpeg"):
+    _local_ffmpeg = os.path.join(os.path.expanduser("~"), "ffmpeg", "ffmpeg.exe")
+    if os.path.isfile(_local_ffmpeg):
+        os.environ["PATH"] += os.pathsep + os.path.dirname(_local_ffmpeg)
+
+from pydub import AudioSegment
 
 from twilio_agent.utils.cache import CacheManager
 from twilio_agent.actions.redis_actions import set_transcription_text
@@ -74,7 +85,14 @@ def generate_speech(text: str) -> tuple[bytes, float]:
         if isinstance(chunk, str):
             chunk = chunk.encode()
         chunks.append(chunk)
-    bytes_data = b"".join(chunks)
+    raw_bytes = b"".join(chunks)
+
+    # Append 0.5s silence to prevent audio cutoff
+    audio = AudioSegment.from_mp3(io.BytesIO(raw_bytes))
+    audio += AudioSegment.silent(duration=300)
+    output = io.BytesIO()
+    audio.export(output, format="mp3")
+    bytes_data = output.getvalue()
 
     cache_manager.set("generate_speech", input_data, bytes_data, ".mp3")
 

@@ -149,6 +149,9 @@
 									{call.transferred_to}
 								</span>
 							{/if}
+							{#if call.hangup_reason}
+								<span class="text-red-500">{call.hangup_reason}</span>
+							{/if}
 						</div>
 					</div>
 
@@ -160,6 +163,9 @@
 						{#if call.intent && location}&ensp;&middot;&ensp;{/if}
 						{location || ""}
 					</span>
+					{#if call.hangup_reason}
+						<span class="text-xs text-red-500 shrink-0 hidden sm:inline">{call.hangup_reason}</span>
+					{/if}
 					{#if call.transferred_to}
 						<span class="text-xs text-muted-foreground items-center gap-1 shrink-0 hidden sm:flex">
 							<PhoneForwardedIcon class="h-3 w-3" />
