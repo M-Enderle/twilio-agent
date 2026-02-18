@@ -10,7 +10,7 @@ from twilio_agent.actions.redis_actions import (
 from twilio.twiml.voice_response import Gather
 from twilio_agent.utils.ai import yes_no_question
 from twilio_agent.utils.pricing import get_price
-from twilio_agent.utils.utils import call_info
+from twilio_agent.utils.utils import call_info, plz_fallback_path
 from logging import getLogger
 
 logger = getLogger("PricingFlow")
@@ -64,7 +64,7 @@ async def start_pricing_handler(request: Request) -> str:
         response = new_response()
         say(response, "Es ist ein Fehler aufgetreten. Bitte versuche es erneut.")
         agent_message(caller_number, "Error: No location found in Redis")
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     latitude = location.get("latitude")
@@ -75,7 +75,7 @@ async def start_pricing_handler(request: Request) -> str:
         response = new_response()
         say(response, "Es ist ein Fehler aufgetreten. Bitte versuche es erneut.")
         agent_message(caller_number, "Error: Invalid coordinates")
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     # Get pricing for the service

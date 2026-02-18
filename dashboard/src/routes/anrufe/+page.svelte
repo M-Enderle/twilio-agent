@@ -146,7 +146,7 @@
 							{#if call.transferred_to}
 								<span class="flex items-center gap-0.5">
 									<PhoneForwardedIcon class="h-3 w-3" />
-									{call.transferred_to}
+									{call.transferred_to}{#if call.transferred_to_phone}&ensp;{formatPhone(call.transferred_to_phone)}{/if}
 								</span>
 							{/if}
 							{#if call.hangup_reason}
@@ -169,7 +169,7 @@
 					{#if call.transferred_to}
 						<span class="text-xs text-muted-foreground items-center gap-1 shrink-0 hidden sm:flex">
 							<PhoneForwardedIcon class="h-3 w-3" />
-							{call.transferred_to}
+							{call.transferred_to}{#if call.transferred_to_phone}&ensp;{formatPhone(call.transferred_to_phone)}{/if}
 						</span>
 					{/if}
 

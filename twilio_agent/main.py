@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -15,6 +15,9 @@ from twilio_agent.conversation_flow import router as conversation_router
 from twilio_agent.actions.location_sharing_actions import router as location_router
 from twilio_agent.actions.recording_actions import router as recording_router
 from twilio_agent.utils.eleven import cache_manager
+from twilio.twiml.voice_response import Dial, Number
+from twilio_agent.actions.twilio_actions import new_response, send_request
+from twilio_agent.utils.utils import call_info
 from twilio_agent.scheduler import start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
@@ -71,6 +74,16 @@ def create_app() -> FastAPI:
             "service": "twilio-agent",
             "timestamp": timestamp,
         }
+
+    @application.api_route("/adac", methods=["GET", "POST"])
+    async def adac(request: Request):
+        """Redirect the call to ADAC contact, using the called number as caller ID."""
+        caller_number, called_number, form_data = await call_info(request)
+        response = new_response()
+        dial = Dial(callerId=called_number)
+        dial.append(Number("+491601212905"))
+        response.append(dial)
+        return send_request(request, response)
 
     return application
 

@@ -426,10 +426,11 @@ async def list_calls(service: Optional[str] = None):
                 "location": location_data,
                 "latitude": latitude,
                 "longitude": longitude,
-                "provider": info.get("Anbieter", ""),
+                "provider": info.get("Dienstleister", ""),
                 "price": info.get("Preis", ""),
                 "hangup_reason": info.get("hangup_reason", ""),
                 "transferred_to": info.get("Weitergeleitet an", ""),
+                "transferred_to_phone": info.get("Weitergeleitet an Nummer", ""),
                 "service": call_service,
             })
 

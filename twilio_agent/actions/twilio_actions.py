@@ -105,9 +105,48 @@ async def immediate_human_transfer(request: Request, caller_number: str, service
     )
     agent_message(caller_number, settings.service(service).announcements.transfer_message)
     save_job_info(caller_number, "Mitarbeiter angefordert", "Ja")
-    dial = Dial(callerId=settings.service(service).phone_number)
-    dial.append(Number(settings.service(service).emergency_contact.phone))
-    response.append(dial)
+
+    # Try to find the closest provider if the caller has a location
+    queue_populated = False
+    location = get_location(caller_number)
+    if location:
+        latitude = location.get("latitude")
+        longitude = location.get("longitude")
+        if latitude and longitude:
+            try:
+                price, duration, provider_name, provider_phone = get_price(
+                    service, float(longitude), float(latitude)
+                )
+                save_job_info(caller_number, "Dienstleister", provider_name)
+                save_job_info(caller_number, "Dienstleister Telefon", provider_phone)
+                _populate_contact_queue(caller_number, service, provider_name)
+                queue_populated = True
+            except Exception as exc:
+                logger.warning(
+                    "Could not calculate price for immediate transfer of %s: %s",
+                    caller_number, exc,
+                )
+
+    # Fall back to emergency contact if no provider location found
+    if not queue_populated:
+        emergency = settings.service(service).emergency_contact
+        if emergency.phone:
+            emergency_name = emergency.name or "Notfallkontakt"
+            clear_caller_queue(caller_number)
+            add_to_caller_queue(caller_number, emergency_name, emergency.phone)
+            save_job_info(caller_number, "Dienstleister", emergency_name)
+            logger.info(
+                "Immediate transfer for %s: using emergency contact %s (%s)",
+                caller_number, emergency_name, emergency.phone,
+            )
+
+    # Use the standard transfer mechanism with action callbacks for tracking
+    transfer_result = start_transfer(response, caller_number)
+    if transfer_result == "no_more_agents":
+        say(response, "Leider ist momentan niemand erreichbar. Bitte versuchen Sie es später erneut.")
+        save_job_info(caller_number, "hangup_reason", "Keine Kontakte verfügbar")
+        response.hangup()
+
     return send_request(request, response)
 
 

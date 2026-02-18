@@ -5,7 +5,7 @@
 	import { Input } from "$lib/components/ui/input/index.js";
 	import { Label } from "$lib/components/ui/label/index.js";
 	import { Skeleton } from "$lib/components/ui/skeleton/index.js";
-	import type { Standort, StandortKontakt, ServiceId } from "$lib/types";
+	import type { Standort, StandortKontakt, ServiceId, CallSummary } from "$lib/types";
 	import {
 		getStandorte,
 		createStandort,
@@ -13,12 +13,17 @@
 		deleteStandort,
 		geocodeAddress,
 	} from "$lib/api";
+	import { formatPhone, formatDateTimeShort } from "$lib/utils";
+	import PhoneForwardedIcon from "@lucide/svelte/icons/phone-forwarded";
+	import { goto } from "$app/navigation";
 
 	let {
 		standortId = null,
 		isNew = false,
 		open = $bindable(true),
 		serviceId,
+		calls = [],
+		standorte = [],
 		onclose,
 		onsave,
 	}: {
@@ -26,6 +31,8 @@
 		isNew?: boolean;
 		open?: boolean;
 		serviceId: ServiceId;
+		calls?: CallSummary[];
+		standorte?: Standort[];
 		onclose?: () => void;
 		onsave?: () => void;
 	} = $props();
@@ -186,6 +193,19 @@
 	}
 
 	const title = $derived(isNew ? "Neuer Standort" : (name || "Standort"));
+
+	// Filter calls that were successfully transferred to this Standort
+	const standortCalls = $derived(
+		(() => {
+			if (isNew || !name) return [];
+			return calls.filter(
+				(c) =>
+					c.provider &&
+					c.provider.toLowerCase() === name.toLowerCase() &&
+					c.transferred_to
+			);
+		})()
+	);
 </script>
 
 <Dialog.Root open={open} onOpenChange={handleOpenChange}>
@@ -328,6 +348,46 @@
 						Die Reihenfolge der Kontakte bestimmt die Anrufreihenfolge bei Weiterleitungen.
 					</p>
 				</div>
+
+				<!-- Call history section -->
+				{#if !isNew && standortCalls.length > 0}
+					<div class="border-t pt-4">
+						<Label class="text-base">Weiterleitungen</Label>
+						<p class="text-xs text-muted-foreground mb-3">
+							{standortCalls.length} erfolgreich weitergeleitet{standortCalls.length === 1 ? "er Anruf" : "e Anrufe"}
+						</p>
+						<div class="rounded-lg border divide-y max-h-64 overflow-y-auto">
+							{#each standortCalls as call}
+								<button
+									class="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-muted/40 transition-colors cursor-pointer"
+									onclick={() => {
+										handleOpenChange(false);
+										goto(`/anrufe?nummer=${call.number}&ts=${call.timestamp}`);
+									}}
+								>
+									<div class="flex-1 min-w-0">
+										<div class="flex items-center gap-2">
+											<span class="font-medium text-sm">{formatPhone(call.phone || call.number)}</span>
+											<span class="text-xs text-muted-foreground">{formatDateTimeShort(call.start_time)}</span>
+										</div>
+										<div class="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+											<span class="flex items-center gap-0.5">
+												<PhoneForwardedIcon class="h-3 w-3" />
+												{call.transferred_to}{#if call.transferred_to_phone}&ensp;{formatPhone(call.transferred_to_phone)}{/if}
+											</span>
+											{#if call.price}
+												<span>{call.price}</span>
+											{/if}
+										</div>
+									</div>
+									<svg class="h-4 w-4 text-muted-foreground/30 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+									</svg>
+								</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
 			</div>
 
 			<!-- Footer -->

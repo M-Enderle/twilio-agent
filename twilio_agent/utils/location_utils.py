@@ -107,7 +107,7 @@ def _extract_plz_ort(
 
 
 async def get_plz_from_coordinates(lat: float, lon: float) -> Optional[str]:
-    """Reverse-geocode coordinates and return a 5-digit postal code, or None."""
+    """Reverse-geocode coordinates and return a 4 or 5-digit postal code, or None."""
     if not _API_KEY:
         raise ValueError("MAPS_API_KEY environment variable is not set")
 
@@ -119,7 +119,7 @@ async def get_plz_from_coordinates(lat: float, lon: float) -> Optional[str]:
     if not result:
         return None
     plz, _ = _extract_plz_ort(result)
-    if plz and len(plz.strip()) == 5:
+    if plz and len(plz.strip()) >= 4:
         return plz
     return None
 

@@ -36,6 +36,7 @@ async def parse_transfer_call_handler(request: Request, name: str, phone: str) -
 
         save_job_info(caller_number, "Erfolgreich weitergeleitet", "Ja")
         save_job_info(caller_number, "Weitergeleitet an", contact_name)
+        save_job_info(caller_number, "Weitergeleitet an Nummer", contact_phone)
         agent_message(caller_number, f"Successfully transferred to {contact_name} ({contact_phone})")
 
         # Send job details SMS to the agent who answered
@@ -45,7 +46,7 @@ async def parse_transfer_call_handler(request: Request, name: str, phone: str) -
             logger.error(f"Failed to send job details SMS to {contact_phone}: {exc}")
 
         # Remember this contact for repeat calls
-        set_transferred_to(caller_number, contact_phone)
+        set_transferred_to(caller_number, contact_phone, contact_name)
 
         # Keep contact in queue during active transfer (shows who is currently connected)
         # Queue will be cleaned up when call ends via status callback

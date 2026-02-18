@@ -3,12 +3,11 @@ import logging
 from fastapi.responses import JSONResponse
 from twilio_agent.utils.utils import which_service, direct_transfer, call_info
 from fastapi import APIRouter, Request
-from twilio_agent.actions.redis_actions import get_job_info, init_new_call, get_transferred_to, save_job_info, clear_caller_queue
+from twilio_agent.actions.redis_actions import get_job_info, init_new_call, get_transferred_to, save_job_info, clear_caller_queue, add_to_caller_queue
 from twilio_agent.settings import settings
 from twilio_agent.actions.telegram_actions import send_simple_notification, send_telegram_notification
 import asyncio
-from twilio_agent.actions.twilio_actions import new_response, send_request
-from twilio.twiml.voice_response import Dial, Number
+from twilio_agent.actions.twilio_actions import new_response, send_request, say, start_transfer
 
 from twilio_agent.flow.entry import greet
 from twilio_agent.flow.address import ask_address_handler, process_address_handler, address_processed_handler, confirm_address_handler
@@ -34,11 +33,30 @@ async def incoming_call(request: Request):
     # Check if the user called before
     previous_transfer = get_transferred_to(caller_number)
     if previous_transfer:
-        logger.info(f"Caller {caller_number} was previously transferred to {previous_transfer}. Attempting to transfer again.")
+        prev_phone, prev_name = previous_transfer
+        logger.info(f"Caller {caller_number} was previously transferred to {prev_name} ({prev_phone}). Transferring directly.")
+
+        # Initialize call so it appears in history
+        init_new_call(caller_number, service)
+        save_job_info(caller_number, "Wiederholungsanruf", "Ja")
+
+        # Start recording
+        call_sid = form_data.get("CallSid")
+        if call_sid and caller_number != "anonymous":
+            asyncio.create_task(start_recording(call_sid, caller_number))
+
+        # Send Telegram notification
+        asyncio.create_task(send_telegram_notification(caller_number, service))
+
+        # Set up queue with the previous contact
+        clear_caller_queue(caller_number)
+        contact_name = prev_name or "Vorheriger Kontakt"
+        add_to_caller_queue(caller_number, contact_name, prev_phone)
+        save_job_info(caller_number, "Dienstleister", contact_name)
+
         response = new_response()
-        dial = Dial(callerId=settings.service(service).phone_number)
-        dial.append(Number(previous_transfer))
-        response.append(dial)
+        say(response, settings.service(service).announcements.transfer_message)
+        start_transfer(response, caller_number)
         return send_request(request, response)
 
     # check for direct transfer

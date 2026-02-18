@@ -142,6 +142,8 @@
 		isNew={isNewStandort}
 		bind:open={modalOpen}
 		{serviceId}
+		{calls}
+		{standorte}
 		onclose={onModalClose}
 		onsave={onModalSave}
 	/>

@@ -54,8 +54,10 @@ class CacheManager:
         """Load every cached file into memory at startup."""
         if not self.root_folder.exists():
             self.root_folder.mkdir(parents=True, exist_ok=True)
+            logger.info("Cache folder %s created (empty)", self.root_folder)
             return
 
+        count = 0
         for cache_dir in self.root_folder.iterdir():
             if not cache_dir.is_dir():
                 continue
@@ -66,10 +68,14 @@ class CacheManager:
                     self._cache[cache_file.stem] = self._read_file(
                         cache_file,
                     )
+                    count += 1
                 except Exception as e:
                     logger.warning(
                         "Error loading cache file %s: %s", cache_file, e,
                     )
+        logger.info(
+            "Loaded %d cached entries from %s", count, self.root_folder,
+        )
 
     def _get_cache_dir(self, function_name: str) -> Path:
         """Return the subdirectory for *function_name*, creating it if needed."""

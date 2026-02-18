@@ -59,6 +59,7 @@ def generate_speech(text: str) -> tuple[bytes, float]:
     input_data = {"text": text}
     cached = cache_manager.get("generate_speech", input_data)
     if cached is not None:
+        logger.info("TTS cache hit for text: '%s'", _truncate_for_log(text))
         return cached, 0.0
 
     start_time = time.perf_counter()

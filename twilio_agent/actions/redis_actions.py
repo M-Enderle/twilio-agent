@@ -292,20 +292,31 @@ def clear_caller_queue(caller: str) -> None:
     redis.delete(_active_call_key(caller, "warteschlange"))
 
 
-def set_transferred_to(caller: str, transferred_to: str) -> None:
-    """Record which contact the call was transferred to."""
+def set_transferred_to(caller: str, phone: str, name: str = "") -> None:
+    """Record which contact the call was transferred to (phone + name)."""
     redis.set(
         _active_call_key(caller, "Weitergeleitet an"),
-        transferred_to,
+        phone,
         ex=PERSISTENCE_TIME,
     )
-    _set_hist_info(caller, "Weitergeleitet an", transferred_to)
+    if name:
+        redis.set(
+            _active_call_key(caller, "Weitergeleitet an Name"),
+            name,
+            ex=PERSISTENCE_TIME,
+        )
 
 
-def get_transferred_to(caller: str) -> str | None:
-    """Return the name of the contact the call was transferred to."""
-    result = redis.get(_active_call_key(caller, "Weitergeleitet an"))
-    return result.decode("utf-8") if result else None
+def get_transferred_to(caller: str) -> tuple[str, str] | None:
+    """Return (phone, name) of the previous transfer contact, or None."""
+    phone = redis.get(_active_call_key(caller, "Weitergeleitet an"))
+    if not phone:
+        return None
+    name = redis.get(_active_call_key(caller, "Weitergeleitet an Name"))
+    return (
+        phone.decode("utf-8"),
+        name.decode("utf-8") if name else "",
+    )
 
 
 def save_job_info(caller: str, detail_name: str, detail_value: str) -> None:

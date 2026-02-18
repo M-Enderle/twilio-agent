@@ -241,8 +241,19 @@ class TestTransferredTo:
         caller = _unique_caller()
         try:
             init_new_call(caller, "test-service")
-            set_transferred_to(caller, "Max Mustermann")
-            assert get_transferred_to(caller) == "Max Mustermann"
+            set_transferred_to(caller, "+491234567890", "Max Mustermann")
+            result = get_transferred_to(caller)
+            assert result == ("+491234567890", "Max Mustermann")
+        finally:
+            cleanup_call(caller)
+
+    def test_set_without_name(self):
+        caller = _unique_caller()
+        try:
+            init_new_call(caller, "test-service")
+            set_transferred_to(caller, "+491234567890")
+            result = get_transferred_to(caller)
+            assert result == ("+491234567890", "")
         finally:
             cleanup_call(caller)
 

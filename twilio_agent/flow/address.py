@@ -11,7 +11,7 @@ from twilio_agent.actions.redis_actions import (
 from twilio.twiml.voice_response import Record, Gather
 from twilio_agent.utils.ai import process_location, yes_no_question, correct_plz
 from twilio_agent.utils.location_utils import get_geocode_result, get_plz_from_coordinates
-from twilio_agent.utils.utils import call_info
+from twilio_agent.utils.utils import call_info, plz_fallback_path
 from twilio_agent.utils.eleven import transcribe_speech
 import threading
 from logging import getLogger
@@ -47,7 +47,7 @@ async def process_address_handler(request: Request) -> str:
     if not recording_url:
         logger.warning(f"No recording provided for caller {caller_number}, redirecting to PLZ")
         response = new_response()
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     # process recording
@@ -77,7 +77,7 @@ async def address_processed_handler(request: Request) -> str:
     else:
         logger.warning(f"Transcription timeout for caller {caller_number}, redirecting to PLZ")
         response = new_response()
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     user_message(caller_number, transcription)
@@ -97,7 +97,7 @@ async def address_processed_handler(request: Request) -> str:
         ai_message(caller_number, "<Request timed out>", 6.0)
         logger.warning(f"Location processing timeout for caller {caller_number}, redirecting to PLZ")
         response = new_response()
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
     except HumanAgentRequested:
         logger.info(f"Caller {caller_number} requested a human agent during address processing.")
@@ -132,7 +132,7 @@ async def address_processed_handler(request: Request) -> str:
         )
         logger.info(f"Location extraction failed for caller {caller_number}, redirecting to PLZ")
         response = new_response()
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     ai_message(
@@ -156,7 +156,7 @@ async def address_processed_handler(request: Request) -> str:
         )
         logger.info(f"Geocoding failed for caller {caller_number}, redirecting to PLZ")
         response = new_response()
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     parsed_location = extracted_address
@@ -165,7 +165,7 @@ async def address_processed_handler(request: Request) -> str:
     if not parsed_location:
         logger.info(f"No valid address parsed for caller {caller_number}, redirecting to PLZ")
         response = new_response()
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     # Resolve a full 5-digit PLZ if Google returned an incomplete one
@@ -260,7 +260,7 @@ async def confirm_address_handler(request: Request) -> str:
             response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
         else:
             # Fall back to PLZ
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+            response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     except asyncio.TimeoutError:
@@ -268,7 +268,7 @@ async def confirm_address_handler(request: Request) -> str:
         logger.warning(f"Address confirmation timeout for caller {caller_number}, redirecting to PLZ")
         response = new_response()
         # Fallback to PLZ on timeout
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        response.redirect(f"{settings.env.SERVER_URL}{plz_fallback_path(service)}")
         return send_request(request, response)
 
     except HumanAgentRequested:

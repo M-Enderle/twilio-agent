@@ -42,6 +42,12 @@ def which_service(phone_number_origin: str) -> str:
     return None
 
 
+def plz_fallback_path(service: str) -> str:
+    """Return fallback URL path when address collection fails.
+    notdienst-abschlepp skips PLZ and goes to SMS offer."""
+    return "/ask-send-sms" if service == "notdienst-abschlepp" else "/ask-plz"
+
+
 def direct_transfer(service: str) -> bool:
     """Check if direct transfer is enabled for the service."""
     service_settings = settings.service(service)

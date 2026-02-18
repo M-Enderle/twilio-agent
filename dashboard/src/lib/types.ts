@@ -82,6 +82,7 @@ export interface CallSummary {
 	price: string;
 	hangup_reason: string;
 	transferred_to: string;
+	transferred_to_phone: string;
 	service?: ServiceId;
 }
 

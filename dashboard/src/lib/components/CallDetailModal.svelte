@@ -34,7 +34,7 @@
 		"Ort",
 		"hangup_reason",
 		"Live",
-		"Anbieter",
+		"Dienstleister",
 		"Service",
 		"Audioaufnahme",
 		"Audioaufnahme (Erstanruf)",
@@ -301,7 +301,7 @@
 								{formatPhone(phone)}
 							</Dialog.Title>
 							<Dialog.Description class="text-xs sm:text-sm text-muted-foreground truncate">
-								{detail.info.Anbieter ?? ""}{detail.info.Service ? ` \u2022 ${detail.info.Service}` : ""}
+								{detail.info.Dienstleister ?? ""}{detail.info.Service ? ` \u2022 ${detail.info.Service}` : ""}
 							</Dialog.Description>
 						</div>
 					</div>
