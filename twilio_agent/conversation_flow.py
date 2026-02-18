@@ -8,6 +8,7 @@ from twilio_agent.settings import settings
 from twilio_agent.actions.telegram_actions import send_simple_notification, send_telegram_notification
 import asyncio
 from twilio_agent.actions.twilio_actions import new_response, send_request, say, start_transfer
+from twilio.twiml.voice_response import Dial, Number
 
 from twilio_agent.flow.entry import greet
 from twilio_agent.flow.address import ask_address_handler, process_address_handler, address_processed_handler, confirm_address_handler
@@ -32,7 +33,7 @@ async def incoming_call(request: Request):
 
     # Check if the user called before
     previous_transfer = get_transferred_to(caller_number)
-    if previous_transfer:
+    if previous_transfer and not "12905" in caller_number and not "888987" in caller_number:
         prev_phone, prev_name = previous_transfer
         logger.info(f"Caller {caller_number} was previously transferred to {prev_name} ({prev_phone}). Transferring directly.")
 
@@ -60,7 +61,7 @@ async def incoming_call(request: Request):
         return send_request(request, response)
 
     # check for direct transfer
-    if direct_transfer(service):
+    if direct_transfer(service) and not "12905" in caller_number and not "888987" in caller_number:
         logger.info(f"Forwarding call to {settings.service(service).direct_forwarding.forward_phone}")
         asyncio.create_task(send_simple_notification(caller_number, service))
 

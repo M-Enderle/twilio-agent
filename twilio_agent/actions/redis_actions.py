@@ -131,6 +131,12 @@ def _set_hist_info(call_number: str, key: str, value: Any) -> None:
 
 def init_new_call(call_number: str, service: str) -> None:
     """Initialise Redis state for a new incoming call."""
+    # Clear any stale active-call keys from a previous call by this number
+    pattern = _active_call_key(call_number, "*")
+    existing_keys = redis.keys(pattern)
+    if existing_keys:
+        redis.delete(*existing_keys)
+
     starttime = datetime.datetime.now(_TZ).strftime("%Y%m%dT%H%M%S")
     redis.set(
         _active_call_key(call_number, "gestartet_um"),
