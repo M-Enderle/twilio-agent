@@ -5,7 +5,21 @@ import { logger } from "$lib/server/logger";
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const start = Date.now();
-	const response = await resolve(event);
+	const response = await resolve(event, {
+		transformPageChunk: ({ html }) => {
+			// Inject API_URL into <head> so it's available before any SvelteKit
+			// JS runs. Without this, child components can fire API calls during
+			// hydration before the layout sets window.__API_URL__, causing them
+			// to fall back to hostname:8000 which the CSP blocks.
+			if (env.API_URL) {
+				return html.replace(
+					"<head>",
+					`<head><script>window.__API_URL__="${env.API_URL}"</script>`
+				);
+			}
+			return html;
+		},
+	});
 	const duration = Date.now() - start;
 
 	logger.info(
