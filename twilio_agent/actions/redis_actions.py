@@ -1,27 +1,62 @@
+"""Redis-backed data layer for active call state and call history.
+
+Provides helpers for storing and retrieving per-call metadata, conversation
+messages, location data, caller queues, recordings, and transcriptions.
+All active-call keys expire after ``PERSISTENCE_TIME`` seconds.
+"""
+
 import base64
 import datetime
 import json
 import logging
 import os
 import zoneinfo
+from typing import Any
 
-import yaml
+import yaml  # kept for backwards-compatible reads of legacy YAML data
 from redis import Redis
 
 logger = logging.getLogger("uvicorn")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379")
 redis = Redis.from_url(REDIS_URL)
-tz = zoneinfo.ZoneInfo("Europe/Berlin")
+_TZ = zoneinfo.ZoneInfo("Europe/Berlin")
 
-persistance_time = 60 * 60  # 1 hour
+PERSISTENCE_TIME = 60 * 60  # 1 hour
+
+_KEY_PREFIX = "notdienststation"
 
 DEFAULT_RECORDING_TYPE = "initial"
 RECORDING_TYPE_ORDER = (DEFAULT_RECORDING_TYPE, "followup")
 VALID_RECORDING_TYPES = set(RECORDING_TYPE_ORDER)
 
 
+def _loads_json_or_yaml(raw: bytes) -> Any:
+    """Deserialize bytes as JSON, falling back to YAML for legacy data."""
+    text = raw.decode("utf-8")
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return yaml.safe_load(text)
+
+
+def _normalize_phone(number: str) -> str:
+    """Replace '+' with '00' for use in Redis keys."""
+    return number.replace("+", "00")
+
+
+def _active_call_key(call_number: str, suffix: str) -> str:
+    """Build a Redis key for active-call data."""
+    return f"{_KEY_PREFIX}:anrufe:{call_number}:{suffix}"
+
+
+def _history_key(number_without_plus: str, timestamp: str, suffix: str) -> str:
+    """Build a Redis key for call-history data."""
+    return f"{_KEY_PREFIX}:verlauf:{number_without_plus}:{timestamp}:{suffix}"
+
+
 def _normalize_recording_type(recording_type: str | None) -> str:
+    """Return a valid recording type, falling back to the default."""
     if not recording_type:
         return DEFAULT_RECORDING_TYPE
     candidate = str(recording_type).strip().lower()
@@ -38,11 +73,28 @@ def _normalize_recording_type(recording_type: str | None) -> str:
 def _recording_key(
     number_without_plus: str, timestamp: str, recording_type: str
 ) -> str:
-    return f"notdienststation:verlauf:{number_without_plus}:{timestamp}:recording:{recording_type}"
+    """Build a Redis key for a call recording."""
+    return _history_key(
+        number_without_plus, timestamp, f"recording:{recording_type}"
+    )
 
 
-def _set_hist_info(call_number: str, key: str, value: str) -> None:
-    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
+def _format_timed_message(message: str, duration: float | None) -> str:
+    """Append elapsed time to *message* when *duration* is provided."""
+    if duration is not None:
+        return f"{message} (took {duration:.3f}s)"
+    return message
+
+
+def _get_start_time(call_number: str) -> str | None:
+    """Return the decoded start-time string for *call_number*, or ``None``."""
+    raw = redis.get(_active_call_key(call_number, "gestartet_um"))
+    return raw.decode("utf-8") if raw else None
+
+
+def _set_hist_info(call_number: str, key: str, value: Any) -> None:
+    """Upsert a key/value pair into the call-history info list."""
+    start_time = _get_start_time(call_number)
     if not start_time:
         logger.debug(
             "Skipping history update for %s because no start time is stored.",
@@ -50,12 +102,17 @@ def _set_hist_info(call_number: str, key: str, value: str) -> None:
         )
         return
 
-    history_key = f"notdienststation:verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:info"
+    hist_key = _history_key(
+        _normalize_phone(call_number), start_time, "info"
+    )
 
-    redis_content = redis.get(history_key)
+    redis_content = redis.get(hist_key)
     if redis_content:
-        content = yaml.safe_load(redis_content.decode("utf-8"))
+        content = _loads_json_or_yaml(redis_content)
         if not isinstance(content, list):
+            logger.warning(
+                "History info for %s was not a list; resetting.", call_number
+            )
             content = []
     else:
         content = []
@@ -67,19 +124,20 @@ def _set_hist_info(call_number: str, key: str, value: str) -> None:
     filtered.append({key: value})
 
     redis.set(
-        history_key,
-        yaml.dump(filtered, default_flow_style=False, allow_unicode=True),
+        hist_key,
+        json.dumps(filtered, ensure_ascii=False),
     )
 
 
-def init_new_call(call_number: str, service: str):
-    starttime = datetime.datetime.now(tz).strftime("%Y%m%dT%H%M%S")
+def init_new_call(call_number: str, service: str) -> None:
+    """Initialise Redis state for a new incoming call."""
+    starttime = datetime.datetime.now(_TZ).strftime("%Y%m%dT%H%M%S")
     redis.set(
-        f"notdienststation:anrufe:{call_number}:gestartet_um",
+        _active_call_key(call_number, "gestartet_um"),
         starttime,
-        ex=persistance_time,
+        ex=PERSISTENCE_TIME,
     )
-    _set_hist_info(call_number, "Startzeit", datetime.datetime.now(tz).isoformat())
+    _set_hist_info(call_number, "Startzeit", datetime.datetime.now(_TZ).isoformat())
     _set_hist_info(call_number, "Anrufnummer", call_number)
     _set_hist_info(call_number, "Service", service)
     save_job_info(call_number, "Live", "Ja")
@@ -87,58 +145,71 @@ def init_new_call(call_number: str, service: str):
 
 
 def get_service(call_number: str) -> str | None:
+    """Return the service identifier associated with the active call."""
     return get_job_info(call_number, "Service")
 
 
-def agent_message(call_number: str, message: str):
+def agent_message(call_number: str, message: str) -> None:
+    """Log a message from the voice agent."""
     _save_message(call_number, message, "assistant")
     logger.info("Agent message: %s", message)
 
 
-def user_message(call_number: str, message: str):
+def user_message(call_number: str, message: str) -> None:
+    """Log a message from the caller."""
     _save_message(call_number, message, "user")
     logger.info("User message: %s", message)
 
 
 def ai_message(
-    call_number: str, message: str, duration: float = None, model_source: str = None
-):
-    if duration is not None:
-        message_with_timing = f"{message} (took {duration:.3f}s)"
-    else:
-        message_with_timing = message
+    call_number: str,
+    message: str,
+    duration: float | None = None,
+    model_source: str | None = None,
+) -> None:
+    """Log an AI/LLM response, optionally including elapsed time."""
+    message_with_timing = _format_timed_message(message, duration)
     _save_message(call_number, message_with_timing, "AI", model_source)
     logger.info("AI: %s", message_with_timing)
 
 
-def google_message(call_number: str, message: str, duration: float | None = None):
-    if duration is not None:
-        message_with_timing = f"{message} (took {duration:.3f}s)"
-    else:
-        message_with_timing = message
+def google_message(
+    call_number: str, message: str, duration: float | None = None
+) -> None:
+    """Log a Google Maps API response, optionally including elapsed time."""
+    message_with_timing = _format_timed_message(message, duration)
     _save_message(call_number, message_with_timing, "google")
     logger.info("Google: %s", message_with_timing)
 
 
-def twilio_message(call_number: str, message: str):
+def twilio_message(call_number: str, message: str) -> None:
+    """Log a Twilio event."""
     _save_message(call_number, message, "twilio")
     logger.info("Twilio: %s", message)
 
 
-def _save_message(call_number: str, message: str, role: str, model_source: str = None):
-    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
+def _save_message(
+    call_number: str,
+    message: str,
+    role: str,
+    model_source: str | None = None,
+) -> None:
+    """Append a message entry to the call-history message log."""
+    start_time = _get_start_time(call_number)
     if not start_time:
         return
 
-    key = f"notdienststation:verlauf:{call_number.replace('+', '00')}:{start_time.decode('utf-8')}:nachrichten"
+    key = _history_key(
+        _normalize_phone(call_number), start_time, "nachrichten"
+    )
     existing_messages = redis.get(key)
 
     if existing_messages:
-        messages = yaml.safe_load(existing_messages.decode("utf-8"))
+        messages = _loads_json_or_yaml(existing_messages)
     else:
         messages = []
 
-    message_entry = {"role": role, "content": message}
+    message_entry: dict[str, str] = {"role": role, "content": message}
     if model_source:
         message_entry["model"] = model_source
 
@@ -146,44 +217,48 @@ def _save_message(call_number: str, message: str, role: str, model_source: str =
 
     redis.set(
         key,
-        yaml.dump(messages, default_flow_style=False, allow_unicode=True),
+        json.dumps(messages, ensure_ascii=False),
     )
 
 
-def save_location(call_number: str, location: dict):
+def save_location(call_number: str, location: dict) -> None:
+    """Persist the caller's location for the active call and history."""
     redis.set(
-        f"notdienststation:anrufe:{call_number}:standort",
+        _active_call_key(call_number, "standort"),
         json.dumps(location, indent=2, ensure_ascii=False),
-        ex=persistance_time,
+        ex=PERSISTENCE_TIME,
     )
     _set_hist_info(call_number, "Standort", location)
 
 
-def get_location(call_number: str) -> dict:
-    return json.loads(
-        redis.get(f"notdienststation:anrufe:{call_number}:standort").decode("utf-8")
-    )
+def get_location(call_number: str) -> dict | None:
+    """Return the caller's stored location, or ``None`` if absent."""
+    raw = redis.get(_active_call_key(call_number, "standort"))
+    if not raw:
+        return None
+    return json.loads(raw.decode("utf-8"))
 
 
-def get_shared_location(call_number: str) -> dict:
+def get_shared_location(call_number: str) -> dict | None:
+    """Return the location shared via SMS link, or ``None``."""
     location_data = redis.get(
-        f"notdienststation:anrufe:{call_number}:geteilter_standort"
+        _active_call_key(call_number, "geteilter_standort")
     )
     if location_data:
         return json.loads(location_data.decode("utf-8"))
     return None
 
 
-def add_to_caller_queue(caller: str, name: str, phone: str):
+def add_to_caller_queue(caller: str, name: str, phone: str) -> None:
     """Add a contact to the transfer queue with name and phone."""
     queue = json.loads(
-        redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]"
+        redis.get(_active_call_key(caller, "warteschlange")) or b"[]"
     )
     queue.append({"name": name, "phone": phone})
     redis.set(
-        f"notdienststation:anrufe:{caller}:warteschlange",
+        _active_call_key(caller, "warteschlange"),
         json.dumps(queue),
-        ex=persistance_time,
+        ex=PERSISTENCE_TIME,
     )
     # Save full queue info (name and phone) to history for dashboard display
     _set_hist_info(caller, "Warteschlange", queue)
@@ -191,73 +266,77 @@ def add_to_caller_queue(caller: str, name: str, phone: str):
 
 def get_next_caller_in_queue(caller: str) -> dict | None:
     """Get next contact from queue. Returns {name, phone} or None."""
-    queue_data = redis.get(f"notdienststation:anrufe:{caller}:warteschlange")
+    queue_data = redis.get(_active_call_key(caller, "warteschlange"))
     queue = json.loads(queue_data.decode("utf-8")) if queue_data else []
     return queue[0] if queue else None
 
 
-def delete_next_caller(caller: str):
+def delete_next_caller(caller: str) -> None:
+    """Remove the first contact from the transfer queue."""
     queue = json.loads(
-        redis.get(f"notdienststation:anrufe:{caller}:warteschlange") or b"[]"
+        redis.get(_active_call_key(caller, "warteschlange")) or b"[]"
     )
     if queue:
         queue.pop(0)
     redis.set(
-        f"notdienststation:anrufe:{caller}:warteschlange",
+        _active_call_key(caller, "warteschlange"),
         json.dumps(queue),
-        ex=persistance_time,
+        ex=PERSISTENCE_TIME,
     )
     # Update history to reflect queue changes
     _set_hist_info(caller, "Warteschlange", queue)
 
 
-def clear_caller_queue(caller: str):
-    redis.delete(f"notdienststation:anrufe:{caller}:warteschlange")
+def clear_caller_queue(caller: str) -> None:
+    """Delete the entire transfer queue for the caller."""
+    redis.delete(_active_call_key(caller, "warteschlange"))
 
 
-def set_transferred_to(caller: str, transferred_to: str):
+def set_transferred_to(caller: str, transferred_to: str) -> None:
+    """Record which contact the call was transferred to."""
     redis.set(
-        f"notdienststation:anrufe:{caller}:Weitergeleitet an",
+        _active_call_key(caller, "Weitergeleitet an"),
         transferred_to,
-        ex=persistance_time,
+        ex=PERSISTENCE_TIME,
     )
     _set_hist_info(caller, "Weitergeleitet an", transferred_to)
 
 
 def get_transferred_to(caller: str) -> str | None:
-    result = redis.get(f"notdienststation:anrufe:{caller}:Weitergeleitet an")
-    return result.decode('utf-8') if result else None
+    """Return the name of the contact the call was transferred to."""
+    result = redis.get(_active_call_key(caller, "Weitergeleitet an"))
+    return result.decode("utf-8") if result else None
 
 
-def save_job_info(caller: str, detail_name: str, detail_value: str):
+def save_job_info(caller: str, detail_name: str, detail_value: str) -> None:
+    """Persist a named piece of call metadata to both active state and history."""
     _set_hist_info(caller, detail_name, detail_value)
     redis.set(
-        f"notdienststation:anrufe:{caller}:{detail_name}",
+        _active_call_key(caller, detail_name),
         detail_value,
-        ex=persistance_time,
+        ex=PERSISTENCE_TIME,
     )
 
 
-def delete_job_info(caller: str, detail_name: str):
-    redis.delete(f"notdienststation:anrufe:{caller}:{detail_name}")
+def delete_job_info(caller: str, detail_name: str) -> None:
+    """Remove a named piece of call metadata from active state."""
+    redis.delete(_active_call_key(caller, detail_name))
 
 
 def get_job_info(caller: str, detail_name: str) -> str | None:
-    detail = redis.get(f"notdienststation:anrufe:{caller}:{detail_name}")
+    """Retrieve a named piece of call metadata from active state."""
+    detail = redis.get(_active_call_key(caller, detail_name))
     if detail:
         return detail.decode("utf-8")
     return None
 
 
 def get_call_timestamp(call_number: str) -> str | None:
-    """Get the timestamp for when a call was started"""
+    """Get the timestamp for when a call was started."""
     try:
-        timestamp = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
-        if timestamp:
-            return timestamp.decode("utf-8")
-        return None
-    except Exception as e:
-        logger.error(f"Error getting call timestamp: {e}")
+        return _get_start_time(call_number)
+    except (ConnectionError, OSError) as exc:
+        logger.error("Error getting call timestamp: %s", exc)
         return None
 
 
@@ -267,27 +346,33 @@ def save_call_recording(
     content_type: str = "audio/mpeg",
     metadata: dict | None = None,
     recording_type: str | None = None,
-):
+) -> None:
+    """Store a call recording as base64-encoded JSON in Redis."""
     if not call_number or not recording_bytes or call_number == "anonymous":
         return
 
-    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
+    start_time = _get_start_time(call_number)
     if not start_time:
         return
 
-    key_suffix = start_time.decode("utf-8")
     normalized_type = _normalize_recording_type(recording_type)
-    number_without_plus = call_number.replace("+", "00")
-    redis_key = _recording_key(number_without_plus, key_suffix, normalized_type)
+    number_without_plus = _normalize_phone(call_number)
+    redis_key = _recording_key(number_without_plus, start_time, normalized_type)
+
+    duration_info = ""
+    if metadata and "duration_total_seconds" in metadata:
+        duration_info = f", total_duration={metadata['duration_total_seconds']}s"
 
     logger.info(
-        "Saving %s recording for %s with key %s (bytes=%d)",
+        "Saving %s recording for %s with key %s (bytes=%d%s)",
         normalized_type,
         call_number,
         redis_key,
         len(recording_bytes),
+        duration_info,
     )
-    payload_obj = {
+
+    payload_obj: dict[str, Any] = {
         "content_type": content_type,
         "data": base64.b64encode(recording_bytes).decode("ascii"),
         "recording_type": normalized_type,
@@ -295,17 +380,7 @@ def save_call_recording(
     if metadata:
         payload_obj["metadata"] = metadata
 
-    if metadata and "duration_total_seconds" in metadata:
-        logger.info(
-            "Saving recording for %s (total_duration=%ss, bytes=%d)",
-            call_number,
-            metadata.get("duration_total_seconds"),
-            len(recording_bytes),
-        )
-
-    recording_payload = json.dumps(payload_obj)
-
-    redis.set(redis_key, recording_payload)
+    redis.set(redis_key, json.dumps(payload_obj))
 
     if normalized_type == DEFAULT_RECORDING_TYPE:
         save_job_info(call_number, "Audioaufnahme", "Verfügbar")
@@ -314,12 +389,15 @@ def save_call_recording(
         save_job_info(call_number, "Audioaufnahme (SMS Rückruf)", "Verfügbar")
 
 
-def get_call_recording(number: str, timestamp: str, recording_type: str | None = None):
+def get_call_recording(
+    number: str, timestamp: str, recording_type: str | None = None
+) -> dict | None:
+    """Retrieve a stored recording payload (JSON) from Redis."""
     if not number or not timestamp:
         return None
 
     normalized_type = _normalize_recording_type(recording_type)
-    number = number.replace("+", "00")
+    number = _normalize_phone(number)
 
     redis_key = _recording_key(number, timestamp, normalized_type)
     recording_data = redis.get(redis_key)
@@ -331,7 +409,7 @@ def get_call_recording(number: str, timestamp: str, recording_type: str | None =
         payload = json.loads(recording_data.decode("utf-8"))
         payload.setdefault("recording_type", normalized_type)
         return payload
-    except Exception as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.error(
             "Failed to load recording for %s at %s: %s", number, timestamp, exc
         )
@@ -340,7 +418,7 @@ def get_call_recording(number: str, timestamp: str, recording_type: str | None =
 
 def get_call_recording_binary(
     number: str, timestamp: str, recording_type: str | None = None
-):
+) -> tuple[bytes | None, str | None]:
     """Return decoded audio bytes and content type for a stored recording."""
     payload = get_call_recording(number, timestamp, recording_type)
     if not payload:
@@ -352,7 +430,7 @@ def get_call_recording_binary(
 
     try:
         audio_bytes = base64.b64decode(data_field)
-    except Exception as exc:
+    except (ValueError, base64.binascii.Error) as exc:
         logger.error(
             "Failed to decode recording for %s at %s: %s", number, timestamp, exc
         )
@@ -362,6 +440,7 @@ def get_call_recording_binary(
 
 
 def get_available_recordings(number: str, timestamp: str) -> dict[str, dict]:
+    """Return all available recordings keyed by recording type."""
     recordings: dict[str, dict] = {}
     for recording_type in RECORDING_TYPE_ORDER:
         payload = get_call_recording(number, timestamp, recording_type)
@@ -370,24 +449,31 @@ def get_available_recordings(number: str, timestamp: str) -> dict[str, dict]:
     return recordings
 
 
-def cleanup_call(call_number: str):
-    start_time = redis.get(f"notdienststation:anrufe:{call_number}:gestartet_um")
+def cleanup_call(call_number: str) -> None:
+    """Remove transient active-call keys from Redis."""
+    start_time = redis.get(_active_call_key(call_number, "gestartet_um"))
     if not start_time:
         return
 
     keys_to_delete = [
-        f"notdienststation:anrufe:{call_number}:gestartet_um",
-        f"notdienststation:anrufe:{call_number}:warteschlange",
+        _active_call_key(call_number, "gestartet_um"),
+        _active_call_key(call_number, "warteschlange"),
     ]
 
-    logger.warning(f"Cleaning up call data for {call_number}: {keys_to_delete}")
+    logger.warning(
+        "Cleaning up call data for %s: %s", call_number, keys_to_delete
+    )
 
-    for key in keys_to_delete:
-        redis.delete(key)
+    redis.delete(*keys_to_delete)
 
 
-def set_transcription_text(call_number: str, transcription_text: str | None):
+def set_transcription_text(
+    call_number: str, transcription_text: str | None
+) -> None:
+    """Store the transcription text for the call."""
     save_job_info(call_number, "Transkription", transcription_text or "")
 
+
 def get_transcription_text(call_number: str) -> str | None:
+    """Retrieve the transcription text for the call."""
     return get_job_info(call_number, "Transkription")

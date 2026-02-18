@@ -35,22 +35,22 @@ async def incoming_call(request: Request):
     previous_transfer = get_transferred_to(caller_number)
     if previous_transfer:
         logger.info(f"Caller {caller_number} was previously transferred to {previous_transfer}. Attempting to transfer again.")
-        with new_response() as response:
-            dial = Dial(callerId=settings.service(service).phone_number)
-            dial.append(Number(previous_transfer))
-            response.append(dial)
-            return send_request(request, response)
+        response = new_response()
+        dial = Dial(callerId=settings.service(service).phone_number)
+        dial.append(Number(previous_transfer))
+        response.append(dial)
+        return send_request(request, response)
 
     # check for direct transfer
     if direct_transfer(service):
         logger.info(f"Forwarding call to {settings.service(service).direct_forwarding.forward_phone}")
         asyncio.create_task(send_simple_notification(caller_number, service))
 
-        with new_response() as response:
-            dial = Dial(callerId=settings.service(service).phone_number)
-            dial.append(Number(settings.service(service).direct_forwarding.forward_phone))
-            response.append(dial)
-            return send_request(request, response)
+        response = new_response()
+        dial = Dial(callerId=settings.service(service).phone_number)
+        dial.append(Number(settings.service(service).direct_forwarding.forward_phone))
+        response.append(dial)
+        return send_request(request, response)
 
     # If not direct transfer init a new call
     init_new_call(caller_number, service)

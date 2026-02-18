@@ -1,3 +1,10 @@
+"""Twilio call recording lifecycle management.
+
+Handles starting recordings on active calls, processing Twilio recording
+status callbacks (download and persist to Redis), and serving stored
+recordings to the dashboard with HTTP range-request support.
+"""
+
 import asyncio
 import logging
 import os
@@ -8,207 +15,285 @@ from fastapi.responses import JSONResponse, Response
 from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client
 
-from twilio_agent.actions.redis_actions import (get_call_recording_binary,
-                                                get_call_timestamp,
-                                                save_call_recording)
+from twilio_agent.actions.redis_actions import (
+    get_call_recording_binary,
+    get_call_timestamp,
+    save_call_recording,
+)
 
-account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-server_url = os.getenv("SERVER_URL")
+_account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+_auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+_server_url = os.getenv("SERVER_URL")
 
-client = Client(account_sid, auth_token)
+_twilio_client = Client(_account_sid, _auth_token)
 
 router = APIRouter()
 
 logger = logging.getLogger("uvicorn")
 
+_MAX_RECORDING_RETRIES = 3
 
-async def start_recording(call_sid: str, caller: str):
-    max_retries = 3
-    for attempt in range(max_retries):
+
+def _encode_phone(number: str) -> str:
+    """Replace leading '+' with '00' for URL-safe phone representation."""
+    return number.replace("+", "00")
+
+
+def _decode_phone(encoded: str) -> str:
+    """Restore a '00'-prefixed phone number back to '+' format."""
+    if encoded and encoded.startswith("00"):
+        return "+" + encoded[2:]
+    return encoded
+
+
+async def start_recording(call_sid: str, caller: str) -> None:
+    """Start a Twilio recording on the given call with retry logic.
+
+    Args:
+        call_sid: The Twilio call SID to record.
+        caller: The caller's phone number (E.164 format).
+    """
+    for attempt in range(_MAX_RECORDING_RETRIES):
         try:
             await asyncio.sleep(2)
-            recording = client.calls(call_sid).recordings.create(
-                recording_status_callback=server_url
-                + f"/recording-status-callback/{caller.replace('+', '00')}?source=initial",
+            recording = _twilio_client.calls(call_sid).recordings.create(
+                recording_status_callback=(
+                    f"{_server_url}/recording-status-callback/"
+                    f"{_encode_phone(caller)}?source=initial"
+                ),
                 recording_status_callback_event="completed",
             )
-            logger.info(f"Started recording for call {call_sid}: {recording.sid}")
-            break  # Success, exit loop
+            logger.info(
+                "Started recording for call %s: %s", call_sid, recording.sid
+            )
+            break
         except TwilioRestException as e:
-            if attempt == max_retries - 1:
+            if attempt == _MAX_RECORDING_RETRIES - 1:
                 logger.error(
-                    f"Failed to start recording after {max_retries} attempts: {e}"
+                    "Failed to start recording after %d attempts: %s",
+                    _MAX_RECORDING_RETRIES,
+                    e,
                 )
             else:
-                logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying...")
-                await asyncio.sleep(1)  # Optional delay between retries
+                logger.warning(
+                    "Attempt %d failed: %s. Retrying...", attempt + 1, e
+                )
+                await asyncio.sleep(1)
 
 
-@router.api_route("/recording-status-callback/{caller}", methods=["GET", "POST"])
-async def recording_status_callback(request: Request, caller: str):
+def _parse_segment_duration(raw_value: str | None) -> int | None:
+    """Safely parse the segment duration from form data."""
+    if raw_value is None:
+        return None
+    try:
+        return int(raw_value)
+    except (ValueError, TypeError):
+        return None
+
+
+@router.api_route(
+    "/recording-status-callback/{caller}", methods=["GET", "POST"]
+)
+async def recording_status_callback(
+    request: Request, caller: str
+) -> JSONResponse:
+    """Handle Twilio recording status webhook.
+
+    Downloads the completed recording and persists it to Redis.
+
+    Args:
+        request: The incoming FastAPI request.
+        caller: URL-encoded caller phone number ('00' prefix).
+
+    Returns:
+        JSON acknowledgement response.
+    """
     form_data = await request.form()
-    original_caller = caller
-    if caller and caller.startswith("00"):
-        original_caller = "+" + caller[2:]
+    original_caller = _decode_phone(caller)
 
     recording_url = form_data.get("RecordingUrl")
     recording_sid = form_data.get("RecordingSid")
-    segment_duration = form_data.get("RecordingDuration")
-    try:
-        segment_duration = (
-            int(segment_duration) if segment_duration is not None else None
-        )
-    except Exception:
-        segment_duration = None
-    if recording_url and form_data.get("RecordingStatus") == "completed":
+    segment_duration = _parse_segment_duration(
+        form_data.get("RecordingDuration")
+    )
 
-        timestamp = get_call_timestamp(original_caller)
-        recording_type = (request.query_params.get("source") or "initial").lower()
-        if recording_type not in {"initial", "followup"}:
-            logger.warning(
-                "Unknown recording source '%s' for caller %s; defaulting to 'initial'",
+    if not (recording_url and form_data.get("RecordingStatus") == "completed"):
+        return JSONResponse(content={"status": "ok"})
+
+    timestamp = get_call_timestamp(original_caller)
+    recording_type = (
+        request.query_params.get("source") or "initial"
+    ).lower()
+    if recording_type not in {"initial", "followup"}:
+        logger.warning(
+            "Unknown recording source '%s' for caller %s; "
+            "defaulting to 'initial'",
+            recording_type,
+            original_caller,
+        )
+        recording_type = "initial"
+
+    desired_format = "mp3"
+    media_url = recording_url.replace(".json", f".{desired_format}")
+    logger.info(
+        "Downloading %s recording %s from %s for caller %s "
+        "(segment_duration=%ss)",
+        recording_type,
+        recording_sid,
+        media_url,
+        original_caller,
+        segment_duration,
+    )
+
+    async with httpx.AsyncClient() as http_client:
+        response = await http_client.get(
+            media_url, auth=(_account_sid, _auth_token)
+        )
+
+        if response.status_code == 200:
+            recording_data = response.content
+            default_ctype = (
+                "audio/mpeg" if desired_format == "mp3" else "audio/wav"
+            )
+            content_type = response.headers.get(
+                "Content-Type", default_ctype
+            )
+            metadata = {
+                "recording_sid": recording_sid,
+                "recording_type": recording_type,
+                "bytes_total": len(recording_data),
+                "segment_duration_seconds": segment_duration,
+                "call_timestamp": timestamp,
+            }
+
+            save_call_recording(
+                original_caller,
+                recording_data,
+                content_type,
+                metadata,
+                recording_type=recording_type,
+            )
+            logger.info(
+                "Saved %s recording for %s (bytes=%d, content_type=%s)",
                 recording_type,
                 original_caller,
+                len(recording_data),
+                content_type,
             )
-            recording_type = "initial"
-
-        desired_format = "mp3"
-        media_url = recording_url.replace(".json", f".{desired_format}")
-        logger.info(
-            "Downloading %s recording %s from %s for caller %s (segment_duration=%ss)",
-            recording_type,
-            recording_sid,
-            media_url,
-            original_caller,
-            segment_duration,
-        )
-
-        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(media_url, auth=(account_sid, auth_token))
-
-            if response.status_code == 200:
-                recording_data = response.content
-                default_ctype = "audio/mpeg" if desired_format == "mp3" else "audio/wav"
-                content_type = response.headers.get("Content-Type", default_ctype)
-                metadata = {
-                    "recording_sid": recording_sid,
-                    "recording_type": recording_type,
-                    "bytes_total": len(recording_data),
-                    "segment_duration_seconds": segment_duration,
-                    "call_timestamp": timestamp,
-                }
-
-                save_call_recording(
-                    original_caller,
-                    recording_data,
-                    content_type,
-                    metadata,
-                    recording_type=recording_type,
-                )
-                logger.info(
-                    "Saved %s recording for %s (bytes=%d, content_type=%s)",
-                    recording_type,
-                    original_caller,
-                    len(recording_data),
-                    content_type,
-                )
-            else:
-                logger.error(
-                    "Failed to download recording %s for %s. Status: %s",
-                    recording_sid,
-                    original_caller,
-                    response.status_code,
-                )
+        else:
+            logger.error(
+                "Failed to download recording %s for %s. Status: %s",
+                recording_sid,
+                original_caller,
+                response.status_code,
+            )
 
     return JSONResponse(content={"status": "ok"})
 
 
-def _build_recording_response(number: str, timestamp: str, recording_type: str):
-    audio_bytes, content_type = get_call_recording_binary(
-        number, timestamp, recording_type
-    )
-    if not audio_bytes:
-        raise HTTPException(status_code=404, detail="Recording not found")
-
-    # Add headers needed for audio playback in browsers
-    headers = {
+def _common_headers() -> dict[str, str]:
+    """Return headers shared by all recording responses."""
+    return {
         "Accept-Ranges": "bytes",
-        "Content-Length": str(len(audio_bytes)),
         "Cache-Control": "public, max-age=3600",
         "Access-Control-Allow-Origin": "*",
     }
 
-    return Response(
-        content=audio_bytes,
-        media_type=content_type,
-        headers=headers
-    )
 
+def _build_recording_response_with_range(
+    number: str,
+    timestamp: str,
+    recording_type: str,
+    request: Request,
+) -> Response:
+    """Build a response serving a stored recording with HTTP range support.
 
-def _build_recording_response_with_range(number: str, timestamp: str, recording_type: str, request: Request):
-    """Build response with support for HTTP range requests (needed for audio seeking)."""
+    Args:
+        number: The caller phone number.
+        timestamp: The call timestamp key.
+        recording_type: Either 'initial' or 'followup'.
+        request: The incoming request (inspected for Range header).
+
+    Returns:
+        A full or partial (206) audio response.
+    """
     audio_bytes, content_type = get_call_recording_binary(
         number, timestamp, recording_type
     )
     if not audio_bytes:
-        raise HTTPException(status_code=404, detail="Recording not found")
+        raise HTTPException(
+            status_code=404, detail="Recording not found"
+        )
 
     file_size = len(audio_bytes)
     range_header = request.headers.get("range")
 
-    # Handle range requests
     if range_header:
-        # Parse range header (e.g., "bytes=0-1023")
-        range_match = range_header.replace("bytes=", "").split("-")
-        start = int(range_match[0]) if range_match[0] else 0
-        end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+        try:
+            range_spec = range_header.replace("bytes=", "").split("-")
+            start = int(range_spec[0]) if range_spec[0] else 0
+            end = (
+                int(range_spec[1])
+                if len(range_spec) > 1 and range_spec[1]
+                else file_size - 1
+            )
+        except (ValueError, IndexError):
+            return Response(status_code=416)
 
-        # Ensure valid range
         start = max(0, min(start, file_size - 1))
         end = max(start, min(end, file_size - 1))
 
         chunk = audio_bytes[start : end + 1]
-        headers = {
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(len(chunk)),
-            "Cache-Control": "public, max-age=3600",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length",
-        }
+        headers = _common_headers()
+        headers.update(
+            {
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(len(chunk)),
+                "Access-Control-Expose-Headers": (
+                    "Content-Range, Accept-Ranges, Content-Length"
+                ),
+            }
+        )
 
         return Response(
             content=chunk,
-            status_code=206,  # Partial Content
+            status_code=206,
             media_type=content_type,
-            headers=headers
+            headers=headers,
         )
 
-    # Full file response
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(file_size),
-        "Cache-Control": "public, max-age=3600",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length",
-    }
+    headers = _common_headers()
+    headers.update(
+        {
+            "Content-Length": str(file_size),
+            "Access-Control-Expose-Headers": (
+                "Accept-Ranges, Content-Length"
+            ),
+        }
+    )
 
     return Response(
         content=audio_bytes,
         media_type=content_type,
-        headers=headers
+        headers=headers,
     )
 
 
 @router.get("/recordings/{number}/{timestamp}")
-async def fetch_initial_recording(number: str, timestamp: str, request: Request):
-    return _build_recording_response_with_range(number, timestamp, "initial", request)
+async def fetch_initial_recording(
+    number: str, timestamp: str, request: Request
+) -> Response:
+    """Serve the initial call recording with range-request support."""
+    return _build_recording_response_with_range(
+        number, timestamp, "initial", request
+    )
 
 
 @router.get("/recordings/link/{number}/{timestamp}")
-async def fetch_followup_recording(number: str, timestamp: str, request: Request):
-    return _build_recording_response_with_range(number, timestamp, "followup", request)
+async def fetch_followup_recording(
+    number: str, timestamp: str, request: Request
+) -> Response:
+    """Serve the follow-up (SMS callback) recording with range support."""
+    return _build_recording_response_with_range(
+        number, timestamp, "followup", request
+    )

@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Optional
 
-import yaml
+import yaml  # kept for backwards-compatible reads of legacy YAML data
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -342,9 +342,18 @@ async def recalculate_territories(service_id: str):
 
 # ── Calls (/calls) ───────────────────────────────────────────────
 
-def _parse_info_yaml(raw_bytes: bytes) -> dict:
-    """Parse a YAML info blob (list-of-dicts) into a single merged dict."""
-    info_raw = yaml.safe_load(raw_bytes.decode("utf-8"))
+def _loads_json_or_yaml(raw: bytes):
+    """Deserialize bytes as JSON, falling back to YAML for legacy data."""
+    text = raw.decode("utf-8")
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return yaml.safe_load(text)
+
+
+def _parse_info(raw_bytes: bytes) -> dict:
+    """Parse an info blob (list-of-dicts) into a single merged dict."""
+    info_raw = _loads_json_or_yaml(raw_bytes)
     info: dict = {}
     if isinstance(info_raw, list):
         for item in info_raw:
@@ -378,7 +387,7 @@ async def list_calls(service: Optional[str] = None):
                 continue
 
             try:
-                info = _parse_info_yaml(raw)
+                info = _parse_info(raw)
             except Exception:
                 continue
 
@@ -441,7 +450,7 @@ async def get_call_detail(number: str, timestamp: str):
     if not redis_info:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    info = _parse_info_yaml(redis_info)
+    info = _parse_info(redis_info)
 
     # Cross-check live status against the active call key
     raw_live = info.get("Live", False)
@@ -456,7 +465,7 @@ async def get_call_detail(number: str, timestamp: str):
         f"notdienststation:verlauf:{number}:{timestamp}:nachrichten"
     )
     messages_raw = (
-        yaml.safe_load(redis_messages.decode("utf-8")) if redis_messages else []
+        _loads_json_or_yaml(redis_messages) if redis_messages else []
     )
     messages = []
     for entry in messages_raw or []:

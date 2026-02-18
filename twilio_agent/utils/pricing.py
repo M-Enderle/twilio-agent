@@ -6,9 +6,7 @@ the estimated travel duration and current time of day (day/night rates).
 """
 
 import datetime
-import json
 import logging
-import os
 
 import pytz
 from google.api_core.client_options import ClientOptions

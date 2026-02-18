@@ -3,19 +3,19 @@ from logging import getLogger
 import datetime
 import pytz
 from fastapi import APIRouter, Request
-from twilio_agent.actions.twilio_actions import caller
+from twilio_agent.actions.twilio_actions import get_caller_number as _get_caller
 
 logger = getLogger("Utils")
 
 
 async def get_caller_number(request: Request) -> str:
     """Return the caller phone number extracted from the current request."""
-    return await caller(request)
+    return await _get_caller(request)
 
 
 async def get_called_number(request: Request) -> str:
     """Return the called phone number extracted from the current request."""
-    return await caller(request, called=True)
+    return await _get_caller(request, called=True)
 
 
 async def call_info(request: Request) -> tuple[str, str]:

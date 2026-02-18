@@ -13,9 +13,9 @@ async def greet(service: str, request: Request) -> str:
     """Return a greeting message for the caller based on the service."""
     greeting = settings.service(service).announcements.greeting
     caller_number, called_number, form_data = await call_info(request)
-    with new_response() as response:
-        logger.info(f"Greeting caller {caller_number} with message: '{greeting}'")
-        say(response, greeting)
-        agent_message(caller_number, greeting)
-        response.redirect(f"{settings.env.SERVER_URL}/ask-adress")
-        return HTMLResponse(content=str(response), media_type="application/xml")
+    response = new_response()
+    logger.info(f"Greeting caller {caller_number} with message: '{greeting}'")
+    say(response, greeting)
+    agent_message(caller_number, greeting)
+    response.redirect(f"{settings.env.SERVER_URL}/ask-adress")
+    return HTMLResponse(content=str(response), media_type="application/xml")

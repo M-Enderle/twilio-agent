@@ -21,23 +21,23 @@ async def ask_plz_handler(request: Request) -> str:
     caller_number, called_number, form_data = await call_info(request)
     service = get_service(caller_number)
 
-    with new_response() as response:
-        agent_message(caller_number, settings.service(service).announcements.zipcode_request)
-        gather = Gather(
-            input="dtmf speech",
-            action="/process-plz",
-            timeout=10,
-            numDigits=5,
-            language="de-DE",
-            speechTimeout="auto",
-            enhanced=True,
-            model="experimental_conversations",
-        )
-        say(gather, settings.service(service).announcements.zipcode_request)
-        response.append(gather)
-        # Fallback: retry if no input received
-        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-        return send_request(request, response)
+    response = new_response()
+    agent_message(caller_number, settings.service(service).announcements.zipcode_request)
+    gather = Gather(
+        input="dtmf speech",
+        action="/process-plz",
+        timeout=10,
+        numDigits=5,
+        language="de-DE",
+        speechTimeout="auto",
+        enhanced=True,
+        model="experimental_conversations",
+    )
+    say(gather, settings.service(service).announcements.zipcode_request)
+    response.append(gather)
+    # Fallback: retry if no input received
+    response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+    return send_request(request, response)
 
 
 async def process_plz_handler(request: Request) -> str:
@@ -58,18 +58,18 @@ async def process_plz_handler(request: Request) -> str:
         user_message(caller_number, f"Speech PLZ: {speech} (cleaned: {plz})")
     else:
         logger.warning(f"No PLZ input received for caller {caller_number}")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
+        return send_request(request, response)
 
     # Validate PLZ format (must be exactly 5 digits)
     if not plz or len(plz) != 5 or not plz.isdigit():
         logger.warning(f"Invalid PLZ format '{plz}' for caller {caller_number}")
-        with new_response() as response:
-            say(response, settings.service(service).announcements.plz_invalid_format)
-            agent_message(caller_number, f"Invalid PLZ format: {plz}")
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        say(response, settings.service(service).announcements.plz_invalid_format)
+        agent_message(caller_number, f"Invalid PLZ format: {plz}")
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     # Validate PLZ by attempting geocoding
     try:
@@ -85,11 +85,11 @@ async def process_plz_handler(request: Request) -> str:
            "austria" not in address_lower and "österreich" not in address_lower:
             google_message(caller_number, f"PLZ {plz} liegt außerhalb des Servicegebiets: {location.formatted_address}")
             logger.warning(f"PLZ {plz} is outside service area (found: {location.formatted_address})")
-            with new_response() as response:
-                say(response, settings.service(service).announcements.plz_outside_area)
-                agent_message(caller_number, f"PLZ outside service area: {location.formatted_address}")
-                response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
-                return send_request(request, response)
+            response = new_response()
+            say(response, settings.service(service).announcements.plz_outside_area)
+            agent_message(caller_number, f"PLZ outside service area: {location.formatted_address}")
+            response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
+            return send_request(request, response)
 
         # Save location
         location_dict = location._asdict()
@@ -101,18 +101,18 @@ async def process_plz_handler(request: Request) -> str:
         google_message(caller_number, f"PLZ geocoded: {location.formatted_address}")
 
         # Proceed to pricing
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
+        return send_request(request, response)
     else:
         # Invalid PLZ - fallback to SMS
         google_message(caller_number, f"Keine Standortdaten für PLZ {plz} gefunden.")
         logger.warning(f"Invalid PLZ {plz} for caller {caller_number}, redirecting to SMS offer")
-        with new_response() as response:
-            say(response, settings.service(service).announcements.plz_not_found)
-            agent_message(caller_number, f"PLZ not found: {plz}")
-            response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
-            return send_request(request, response)
+        response = new_response()
+        say(response, settings.service(service).announcements.plz_not_found)
+        agent_message(caller_number, f"PLZ not found: {plz}")
+        response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
+        return send_request(request, response)
 
 
 async def ask_send_sms_handler(request: Request) -> str:
@@ -120,22 +120,22 @@ async def ask_send_sms_handler(request: Request) -> str:
     caller_number, called_number, form_data = await call_info(request)
     service = get_service(caller_number)
 
-    with new_response() as response:
-        agent_message(caller_number, settings.service(service).announcements.sms_offer)
-        gather = Gather(
-            input="speech",
-            action="/process-sms-offer",
-            timeout=5,
-            language="de-DE",
-            speechTimeout="auto",
-            enhanced=True,
-            model="experimental_conversations",
-        )
-        say(gather, settings.service(service).announcements.sms_offer)
-        response.append(gather)
-        # Fallback: retry if no input received
-        response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
-        return send_request(request, response)
+    response = new_response()
+    agent_message(caller_number, settings.service(service).announcements.sms_offer)
+    gather = Gather(
+        input="speech",
+        action="/process-sms-offer",
+        timeout=5,
+        language="de-DE",
+        speechTimeout="auto",
+        enhanced=True,
+        model="experimental_conversations",
+    )
+    say(gather, settings.service(service).announcements.sms_offer)
+    response.append(gather)
+    # Fallback: retry if no input received
+    response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
+    return send_request(request, response)
 
 
 async def process_sms_offer_handler(request: Request) -> str:
@@ -158,10 +158,10 @@ async def process_sms_offer_handler(request: Request) -> str:
             send_sms_with_link(caller_number)
             save_job_info(caller_number, "SMS versendet", "Ja")
 
-            with new_response() as response:
-                say(response, settings.service(service).announcements.sms_sent_confirmation)
-                agent_message(caller_number, "SMS sent with location sharing link. Ending call.")
-                return send_request(request, response)
+            response = new_response()
+            say(response, settings.service(service).announcements.sms_sent_confirmation)
+            agent_message(caller_number, "SMS sent with location sharing link. Ending call.")
+            return send_request(request, response)
         else:
             # User declined SMS - transfer to human
             logger.info(f"Caller {caller_number} declined SMS offer, transferring to human")

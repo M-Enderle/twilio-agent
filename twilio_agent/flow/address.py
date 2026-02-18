@@ -23,18 +23,18 @@ async def ask_address_handler(request: Request) -> str:
     caller_number, called_number, form_data = await call_info(request)
     service = get_service(caller_number)
 
-    with new_response() as response:
-        say(response, settings.service(service).announcements.address_request)
-        agent_message(caller_number, settings.service(service).announcements.address_request)
-        response.append(
-            Record(
-                action="/process-address",
-                timeout=4,
-                playBeep=False,
-                maxLength=10,
-            )
+    response = new_response()
+    say(response, settings.service(service).announcements.address_request)
+    agent_message(caller_number, settings.service(service).announcements.address_request)
+    response.append(
+        Record(
+            action="/process-address",
+            timeout=4,
+            playBeep=False,
+            maxLength=10,
         )
-        return send_request(request, response)
+    )
+    return send_request(request, response)
 
 async def process_address_handler(request: Request) -> str:
     """Process the address provided by the caller."""
@@ -46,21 +46,21 @@ async def process_address_handler(request: Request) -> str:
     # No recording provided
     if not recording_url:
         logger.warning(f"No recording provided for caller {caller_number}, redirecting to PLZ")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
-    # process recording 
+    # process recording
     recording_id = recording_url.rstrip("/").split("/")[-1]
 
     # process in background process 
     threading.Thread(target=transcribe_speech, args=(recording_id, caller_number)).start()
 
-    with new_response() as response:
-        say(response, settings.service(service).announcements.address_processing)
-        agent_message(caller_number, settings.service(service).announcements.address_processing)
-        response.redirect(f"{settings.env.SERVER_URL}/address-processed")
-        return send_request(request, response)
+    response = new_response()
+    say(response, settings.service(service).announcements.address_processing)
+    agent_message(caller_number, settings.service(service).announcements.address_processing)
+    response.redirect(f"{settings.env.SERVER_URL}/address-processed")
+    return send_request(request, response)
     
 
 async def address_processed_handler(request: Request) -> str:
@@ -76,9 +76,9 @@ async def address_processed_handler(request: Request) -> str:
         time.sleep(0.1)
     else:
         logger.warning(f"Transcription timeout for caller {caller_number}, redirecting to PLZ")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     user_message(caller_number, transcription)
     logger.info(f"Transcription for caller {caller_number}: {transcription}")
@@ -96,9 +96,9 @@ async def address_processed_handler(request: Request) -> str:
     except asyncio.TimeoutError:
         ai_message(caller_number, "<Request timed out>", 6.0)
         logger.warning(f"Location processing timeout for caller {caller_number}, redirecting to PLZ")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
     except HumanAgentRequested:
         logger.info(f"Caller {caller_number} requested a human agent during address processing.")
         ai_message(caller_number, "<User requested human agent>", 0.0)
@@ -118,9 +118,9 @@ async def address_processed_handler(request: Request) -> str:
             model_source,
         )
         logger.info(f"Caller {caller_number} does not know address, redirecting to SMS offer")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-send-sms")
+        return send_request(request, response)
 
     # Handle the case where a location was found but could not be extracted
     if not contains_loc or not contains_city_bool:
@@ -131,9 +131,9 @@ async def address_processed_handler(request: Request) -> str:
             model_source,
         )
         logger.info(f"Location extraction failed for caller {caller_number}, redirecting to PLZ")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     ai_message(
         caller_number,
@@ -155,18 +155,18 @@ async def address_processed_handler(request: Request) -> str:
             f"Google Maps konnte die Adresse '{extracted_address}' nicht eindeutig finden.",
         )
         logger.info(f"Geocoding failed for caller {caller_number}, redirecting to PLZ")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     parsed_location = extracted_address
     save_job_info(caller_number, "Adresse erkannt", parsed_location)
 
     if not parsed_location:
         logger.info(f"No valid address parsed for caller {caller_number}, redirecting to PLZ")
-        with new_response() as response:
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     # Resolve a full 5-digit PLZ if Google returned an incomplete one
     resolved_plz = location.plz if (location.plz and len(str(location.plz).strip()) == 5) else None
@@ -202,38 +202,38 @@ async def address_processed_handler(request: Request) -> str:
     parts = [plz_spoken, location.ort]
     place_phrase = " ".join(filter(None, parts)) or location.formatted_address
 
-    with new_response() as response:
-        agent_message(
-            caller_number,
-            settings.service(service).announcements.address_confirm.format(place_phrase=place_phrase),
-        )
-        gather = Gather(
-            input="speech",
-            language="de-DE",
-            action="/confirm-address",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="experimental_conversations",
-        )
-        say(gather, settings.service(service).announcements.address_confirm.format(place_phrase=place_phrase))
+    response = new_response()
+    agent_message(
+        caller_number,
+        settings.service(service).announcements.address_confirm.format(place_phrase=place_phrase),
+    )
+    gather = Gather(
+        input="speech",
+        language="de-DE",
+        action="/confirm-address",
+        speechTimeout="auto",
+        timeout=15,
+        enhanced=True,
+        model="experimental_conversations",
+    )
+    say(gather, settings.service(service).announcements.address_confirm.format(place_phrase=place_phrase))
 
-        gather_2 = Gather(
-            input="speech",
-            language="de-DE",
-            action="/confirm-address",
-            speechTimeout="auto",
-            timeout=15,
-            enhanced=True,
-            model="phone_call",
-        )
-        say(gather_2, settings.service(service).announcements.address_confirm_prompt)
-        response.append(gather)
-        response.append(gather_2)
-        # Fallback: retry if no input received
-        response.redirect(f"{settings.env.SERVER_URL}/ask-adress")
+    gather_2 = Gather(
+        input="speech",
+        language="de-DE",
+        action="/confirm-address",
+        speechTimeout="auto",
+        timeout=15,
+        enhanced=True,
+        model="phone_call",
+    )
+    say(gather_2, settings.service(service).announcements.address_confirm_prompt)
+    response.append(gather)
+    response.append(gather_2)
+    # Fallback: retry if no input received
+    response.redirect(f"{settings.env.SERVER_URL}/ask-adress")
 
-        return send_request(request, response)
+    return send_request(request, response)
 
 
 async def confirm_address_handler(request: Request) -> str:
@@ -254,22 +254,22 @@ async def confirm_address_handler(request: Request) -> str:
         )
         ai_message(caller_number, f"Address confirmation: {reasoning}", duration, model_source)
 
-        with new_response() as response:
-            if is_correct:
-                # Redirect to pricing
-                response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
-            else:
-                # Fall back to PLZ
-                response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        if is_correct:
+            # Redirect to pricing
+            response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
+        else:
+            # Fall back to PLZ
+            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     except asyncio.TimeoutError:
         ai_message(caller_number, "<Confirmation timed out>", 6.0)
         logger.warning(f"Address confirmation timeout for caller {caller_number}, redirecting to PLZ")
-        with new_response() as response:
-            # Fallback to PLZ on timeout
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        # Fallback to PLZ on timeout
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     except HumanAgentRequested:
         logger.info(f"Caller {caller_number} requested human agent during address confirmation.")

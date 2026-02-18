@@ -61,22 +61,22 @@ async def start_pricing_handler(request: Request) -> str:
     location = get_location(caller_number)
     if not location:
         logger.error(f"No location found for caller {caller_number}")
-        with new_response() as response:
-            say(response, "Es ist ein Fehler aufgetreten. Bitte versuche es erneut.")
-            agent_message(caller_number, "Error: No location found in Redis")
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        say(response, "Es ist ein Fehler aufgetreten. Bitte versuche es erneut.")
+        agent_message(caller_number, "Error: No location found in Redis")
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     latitude = location.get("latitude")
     longitude = location.get("longitude")
 
     if not latitude or not longitude:
         logger.error(f"Invalid coordinates for caller {caller_number}: {location}")
-        with new_response() as response:
-            say(response, "Es ist ein Fehler aufgetreten. Bitte versuche es erneut.")
-            agent_message(caller_number, "Error: Invalid coordinates")
-            response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
-            return send_request(request, response)
+        response = new_response()
+        say(response, "Es ist ein Fehler aufgetreten. Bitte versuche es erneut.")
+        agent_message(caller_number, "Error: Invalid coordinates")
+        response.redirect(f"{settings.env.SERVER_URL}/ask-plz")
+        return send_request(request, response)
 
     # Get pricing for the service
     try:
@@ -132,23 +132,23 @@ async def start_pricing_handler(request: Request) -> str:
             minutes_words=duration_formatted
         )
 
-        with new_response() as response:
-            agent_message(caller_number, offer_message)
-            gather = Gather(
-                input="speech",
-                action="/parse-connection-request",
-                timeout=5,
-                language="de-DE",
-                speechTimeout="auto",
-                enhanced=True,
-                model="experimental_conversations",
-            )
-            say(gather, offer_message)
-            say(gather, settings.service(service).announcements.price_offer_prompt)
-            response.append(gather)
-            # Fallback: retry if no input received
-            response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
-            return send_request(request, response)
+        response = new_response()
+        agent_message(caller_number, offer_message)
+        gather = Gather(
+            input="speech",
+            action="/parse-connection-request",
+            timeout=5,
+            language="de-DE",
+            speechTimeout="auto",
+            enhanced=True,
+            model="experimental_conversations",
+        )
+        say(gather, offer_message)
+        say(gather, settings.service(service).announcements.price_offer_prompt)
+        response.append(gather)
+        # Fallback: retry if no input received
+        response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
+        return send_request(request, response)
 
     except Exception as exc:
         logger.error(f"Error calculating pricing for caller {caller_number}: {exc}")
@@ -176,42 +176,42 @@ async def parse_connection_request_handler(request: Request) -> str:
             save_job_info(caller_number, "Verbindung akzeptiert", "Ja")
             logger.info(f"Caller {caller_number} accepted connection, starting transfer via queue")
 
-            with new_response() as response:
-                say(response, settings.service(service).announcements.transfer_message)
-                agent_message(caller_number, "Starting transfer to provider contacts")
+            response = new_response()
+            say(response, settings.service(service).announcements.transfer_message)
+            agent_message(caller_number, "Starting transfer to provider contacts")
 
-                # Use the contact queue to attempt transfers in order
-                transfer_result = start_transfer(response, caller_number)
+            # Use the contact queue to attempt transfers in order
+            transfer_result = start_transfer(response, caller_number)
 
-                if transfer_result == "no_more_agents":
-                    # Queue is empty - no contacts available
-                    logger.error(f"No contacts in queue for {caller_number}")
-                    say(response, "Leider ist momentan niemand erreichbar. Bitte versuche es später erneut.")
-                    save_job_info(caller_number, "hangup_reason", "Keine Kontakte verfügbar")
-                    response.hangup()
-                elif transfer_result == "no_service":
-                    # Could not determine service
-                    logger.error(f"Could not determine service for {caller_number}")
-                    return await immediate_human_transfer(request, caller_number, service)
-                # else: transfer_result == "transferring" - start_transfer already added Dial to response
+            if transfer_result == "no_more_agents":
+                # Queue is empty - no contacts available
+                logger.error(f"No contacts in queue for {caller_number}")
+                say(response, "Leider ist momentan niemand erreichbar. Bitte versuche es später erneut.")
+                save_job_info(caller_number, "hangup_reason", "Keine Kontakte verfügbar")
+                response.hangup()
+            elif transfer_result == "no_service":
+                # Could not determine service
+                logger.error(f"Could not determine service for {caller_number}")
+                return await immediate_human_transfer(request, caller_number, service)
+            # else: transfer_result == "transferring" - start_transfer already added Dial to response
 
-                return send_request(request, response)
+            return send_request(request, response)
         else:
             # User declined connection
             save_job_info(caller_number, "Verbindung akzeptiert", "Nein")
             logger.info(f"Caller {caller_number} declined connection")
-            with new_response() as response:
-                say(response, settings.service(service).announcements.connection_declined)
-                agent_message(caller_number, "User declined connection offer")
-                return send_request(request, response)
+            response = new_response()
+            say(response, settings.service(service).announcements.connection_declined)
+            agent_message(caller_number, "User declined connection offer")
+            return send_request(request, response)
 
     except asyncio.TimeoutError:
         ai_message(caller_number, "<Connection request timed out>", 6.0)
         logger.warning(f"Connection request timeout for caller {caller_number}")
-        with new_response() as response:
-            say(response, settings.service(service).announcements.connection_timeout)
-            response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
-            return send_request(request, response)
+        response = new_response()
+        say(response, settings.service(service).announcements.connection_timeout)
+        response.redirect(f"{settings.env.SERVER_URL}/start-pricing")
+        return send_request(request, response)
 
     except HumanAgentRequested:
         logger.info(f"Caller {caller_number} requested human agent during connection request.")
