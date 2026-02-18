@@ -53,10 +53,11 @@ async def send_telegram_notification(
         timestamp = get_call_timestamp(caller_number)
         dashboard_url = (
             settings.env.DASHBOARD_URL or settings.env.SERVER_URL
-        )
+        ).replace("http://", "https://")
+        normalized_number = caller_number.replace("+", "00")
         live_ui_url = (
             f"{dashboard_url}/anrufe"
-            f"?nummer={caller_number}&ts={timestamp}"
+            f"?nummer={normalized_number}&ts={timestamp}"
         )
 
         if _is_localhost_url(live_ui_url):
