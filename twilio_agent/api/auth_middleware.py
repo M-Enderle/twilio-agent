@@ -15,7 +15,8 @@ POCKETID_USERINFO_URL = (
     os.getenv("POCKETID_ISSUER", "https://auth.pabst-andreas.de").rstrip("/")
     + "/api/oidc/userinfo"
 )
-TOKEN_CACHE_TTL = 300  # 5 minutes
+# 7 days
+TOKEN_CACHE_TTL = 7 * 24 * 3600
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 
 
