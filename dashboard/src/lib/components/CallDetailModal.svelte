@@ -7,7 +7,7 @@
 	import InfoIcon from "@lucide/svelte/icons/info";
 	import MicIcon from "@lucide/svelte/icons/mic";
 	import MessageCircleIcon from "@lucide/svelte/icons/message-circle";
-	import { getCallDetail, getRecordingUrl } from "$lib/api";
+	import { getCallDetail, fetchRecordingBlob } from "$lib/api";
 	import { formatPhone } from "$lib/utils";
 	import type { CallDetail, CallMessage, RecordingInfo } from "$lib/types";
 
@@ -52,7 +52,7 @@
 		}
 	}
 
-	function loadAudio() {
+	async function loadAudio() {
 		if (!detail) return;
 
 		// Only load recordings that haven't been loaded yet
@@ -62,11 +62,16 @@
 
 		if (newRecordings.length === 0) return;
 
-		// Create URLs only for new recordings
+		// Fetch recordings with auth and create blob URLs
 		const newUrls: Record<string, string> = {};
 		for (const recType of newRecordings) {
-			newUrls[recType] = getRecordingUrl(number, timestamp, recType);
 			loadedRecordings.add(recType);
+			try {
+				newUrls[recType] = await fetchRecordingBlob(number, timestamp, recType);
+			} catch {
+				// Recording not available yet, allow retry on next poll
+				loadedRecordings.delete(recType);
+			}
 		}
 
 		// Merge new URLs with existing ones
@@ -74,6 +79,9 @@
 	}
 
 	function cleanup() {
+		for (const url of Object.values(audioUrls)) {
+			URL.revokeObjectURL(url);
+		}
 		audioUrls = {};
 		loadedRecordings = new Set();
 		detail = null;
