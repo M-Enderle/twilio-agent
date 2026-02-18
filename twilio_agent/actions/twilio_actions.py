@@ -335,9 +335,7 @@ def send_job_details_sms(caller: str, transferred_to: str) -> None:
     formatted = location.get("formatted_address", "Unbekannt")
 
     address_lines = ""
-    if recognized:
-        address_lines = f"Adresse erkannt: {recognized}\nStandort: {formatted}"
-    else:
+    if not recognized:
         address_lines = f"Standort: {formatted}"
 
     message_body = f"""Anrufdetails:
