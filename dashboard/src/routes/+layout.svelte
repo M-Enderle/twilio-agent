@@ -9,11 +9,23 @@
 	import MessageSquareTextIcon from "@lucide/svelte/icons/message-square-text";
 	import LogOutIcon from "@lucide/svelte/icons/log-out";
 	import { setToken } from "$lib/api";
-	import { onMount } from "svelte";
+	import { browser } from "$app/environment";
 	import { SERVICES, type ServiceId } from "$lib/types";
 	import { getSelectedService, setSelectedService } from "$lib/service.svelte";
 
 	let { children, data } = $props();
+
+	// Set API URL and token synchronously so child components can use them
+	// immediately (before onMount). This prevents a race where the first API
+	// call falls back to hostname:8000 which isn't in the CSP.
+	if (browser) {
+		if (data.apiUrl) {
+			window.__API_URL__ = data.apiUrl;
+		}
+		if (data.accessToken) {
+			setToken(data.accessToken);
+		}
+	}
 
 	const navItems = [
 		{ href: "/standorte", label: "Standorte", icon: MapPinIcon },
@@ -25,15 +37,6 @@
 
 	const isAuthPage = $derived(page.url.pathname.startsWith("/auth"));
 	const selectedService = $derived(getSelectedService());
-
-	onMount(() => {
-		if (data.apiUrl) {
-			window.__API_URL__ = data.apiUrl;
-		}
-		if (data.accessToken) {
-			setToken(data.accessToken);
-		}
-	});
 </script>
 
 <svelte:head>
