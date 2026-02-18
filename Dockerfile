@@ -30,7 +30,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 FROM base AS dependencies
 
 # Copy ONLY dependency-defining files (cache-friendly: code changes won't bust this layer)
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml poetry.lock README.md ./
 
 # Create minimal package stub so pip can resolve the project
 RUN mkdir -p twilio_agent && touch twilio_agent/__init__.py
