@@ -372,7 +372,7 @@ def start_transfer(response: VoiceResponse, caller: str) -> str:
     tr = Dial(
         action=f"{server_url}/parse-transfer-call/{quote(name)}/{quote(phone)}",
         timeout=timeout,
-        callerId=caller_id,
+        callerId=settings.service(service_id).phone_number,
     )
     tr.append(Number(phone))
     response.append(tr)
